@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable, Literal
 from app.agent.adapters import build_gemini_openai_messages
 from app.agent.providers import GeminiProvider
 from app.agent.prompt import DEFAULT_SYSTEM_PROMPT
+from app.agent.tools.context import ToolContext
 from app.agent.tools.registry import ToolRegistry
 from app.agent.types import ToolCall
 from app.config import Settings
@@ -494,7 +495,18 @@ class AgentCore:
                 )
 
                 started_at = _utc_iso()
-                tool_result = self.tools.execute(tc.name, tc.input)
+                tool_result = self.tools.execute(
+                    tc.name,
+                    tc.input,
+                    ctx=ToolContext(
+                        thread_id=thread_id,
+                        run_id=run_id,
+                        request_index=request_index,
+                        user_msg_index=user_msg_index,
+                        tool_use_id=tc.id,
+                        tool_name=tc.name,
+                    ),
+                )
                 finished_at = _utc_iso()
 
                 await emit(

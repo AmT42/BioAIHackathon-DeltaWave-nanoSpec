@@ -1,7 +1,7 @@
 [project]
 name = "hackathon-agent-core-backend"
 version = "0.1.0"
-description = "Minimal Claude/Gemini chatbot backend with streaming + tool calls"
+description = "Gemini chatbot backend with streaming, tool calls, and science API wrappers"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115.0",
