@@ -21,6 +21,9 @@ from app.agent.tools.http_client import SimpleHttpClient
 from app.agent.tools.registry import ToolSpec
 
 
+DEFAULT_ITP_FALLBACK_URL = "https://phenome.jax.org/itp/surv/MetRapa/C2011"
+
+
 def _utc_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
@@ -73,6 +76,15 @@ def _find_value(row: dict[str, Any], candidates: list[str]) -> str | None:
         if normalized_key in lower and str(lower[normalized_key]).strip():
             return str(lower[normalized_key]).strip()
     return None
+
+
+def _is_nia_host(host: str) -> bool:
+    return host == "nia.nih.gov" or host.endswith(".nia.nih.gov")
+
+
+def _looks_like_waf_block(html: str) -> bool:
+    html_lower = html.lower()
+    return "captcha" in html_lower or "cloudfront" in html_lower
 
 
 def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
@@ -238,25 +250,98 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
         if not url:
             raise ToolExecutionError(code="VALIDATION_ERROR", message="'url' is required")
 
-        source_host = str(urlparse(url).hostname or "").lower()
-        blocked_hint = "NIA host appears blocked by anti-bot controls. Use a JAX ITP URL like https://phenome.jax.org/itp/surv/MetRapa/C2011."
-        try:
-            html, _ = http.get_text(url=url)
-        except ToolExecutionError as exc:
-            if source_host.endswith("nia.nih.gov"):
+        requested_host = str(urlparse(url).hostname or "").lower()
+        configured_fallback = str(payload.get("fallback_url", "")).strip()
+        fallback_url = configured_fallback or DEFAULT_ITP_FALLBACK_URL
+        attempt_urls = [url]
+        if _is_nia_host(requested_host) and fallback_url and fallback_url != url:
+            attempt_urls.append(fallback_url)
+
+        blocked_hint = (
+            "NIA host appears blocked by anti-bot controls. "
+            f"Using JAX fallback URL ({fallback_url}) if needed."
+        )
+        attempted_errors: list[dict[str, str]] = []
+        blocked_hosts: list[str] = []
+        html: str | None = None
+        resolved_url: str | None = None
+        resolved_host: str | None = None
+
+        for idx, attempt_url in enumerate(attempt_urls):
+            attempt_host = str(urlparse(attempt_url).hostname or "").lower()
+            has_next_attempt = idx < len(attempt_urls) - 1
+            try:
+                candidate_html, _ = http.get_text(url=attempt_url)
+            except ToolExecutionError as exc:
+                attempted_errors.append(
+                    {
+                        "url": attempt_url,
+                        "source_host": attempt_host,
+                        "error": exc.message,
+                    }
+                )
+                if _is_nia_host(attempt_host):
+                    blocked_hosts.append(attempt_host)
+                    if has_next_attempt:
+                        continue
+                    raise ToolExecutionError(
+                        code="UPSTREAM_ERROR",
+                        message=blocked_hint,
+                        details={
+                            "source_host": attempt_host,
+                            "blocked_by_waf": True,
+                            "attempted_urls": attempt_urls,
+                            "attempt_errors": attempted_errors,
+                        },
+                    ) from exc
+                if blocked_hosts:
+                    raise ToolExecutionError(
+                        code="UPSTREAM_ERROR",
+                        message="Primary NIA source appears blocked and fallback retrieval failed.",
+                        details={
+                            "source_host": attempt_host,
+                            "blocked_by_waf": True,
+                            "attempted_urls": attempt_urls,
+                            "attempt_errors": attempted_errors,
+                        },
+                    ) from exc
+                raise
+
+            if _is_nia_host(attempt_host) and _looks_like_waf_block(candidate_html):
+                blocked_hosts.append(attempt_host)
+                attempted_errors.append(
+                    {
+                        "url": attempt_url,
+                        "source_host": attempt_host,
+                        "error": "WAF-style response content detected",
+                    }
+                )
+                if has_next_attempt:
+                    continue
                 raise ToolExecutionError(
                     code="UPSTREAM_ERROR",
                     message=blocked_hint,
-                    details={"source_host": source_host, "blocked_by_waf": True, "upstream_error": exc.message},
-                ) from exc
-            raise
+                    details={
+                        "source_host": attempt_host,
+                        "blocked_by_waf": True,
+                        "attempted_urls": attempt_urls,
+                        "attempt_errors": attempted_errors,
+                    },
+                )
 
-        html_lower = html.lower()
-        if source_host.endswith("nia.nih.gov") and ("captcha" in html_lower or "cloudfront" in html_lower):
+            html = candidate_html
+            resolved_url = attempt_url
+            resolved_host = attempt_host
+            break
+
+        if html is None or resolved_url is None or resolved_host is None:
             raise ToolExecutionError(
                 code="UPSTREAM_ERROR",
-                message=blocked_hint,
-                details={"source_host": source_host, "blocked_by_waf": True},
+                message="Unable to fetch ITP survival summary page.",
+                details={
+                    "attempted_urls": attempt_urls,
+                    "attempt_errors": attempted_errors,
+                },
             )
 
         artifacts: list[dict[str, Any]] = []
@@ -271,18 +356,27 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
         preview = text[:2500]
 
         p_values = re.findall(r"p\s*[=<>]\s*([0-9]*\.?[0-9]+)", text, flags=re.IGNORECASE)
+        fallback_used = resolved_url != url
 
         return make_tool_output(
             source="itp",
-            summary="Fetched ITP survival summary page.",
+            summary=(
+                "Fetched ITP survival summary page via fallback source."
+                if fallback_used
+                else "Fetched ITP survival summary page."
+            ),
             data={
-                "url": url,
-                "source_host": source_host,
-                "blocked_by_waf": False,
+                "url": resolved_url,
+                "requested_url": url,
+                "source_host": resolved_host,
+                "blocked_by_waf": bool(blocked_hosts),
+                "fallback_used": fallback_used,
+                "fallback_url": fallback_url if _is_nia_host(requested_host) else None,
                 "text_preview": preview,
                 "p_values": p_values[:20],
             },
-            ids=[url],
+            ids=[resolved_url],
+            warnings=[blocked_hint] if fallback_used else [],
             artifacts=artifacts,
             ctx=ctx,
         )
@@ -324,6 +418,10 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
                 "type": "object",
                 "properties": {
                     "url": {"type": "string"},
+                    "fallback_url": {
+                        "type": "string",
+                        "description": "Optional fallback URL used when the primary source is blocked.",
+                    },
                 },
                 "required": ["url"],
             },

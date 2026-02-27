@@ -178,6 +178,48 @@ def test_hagr_refresh_falls_back_to_stale_cache(tmp_path: Path) -> None:
     assert out["warnings"]
 
 
+def test_itp_summary_uses_jax_fallback_when_nia_is_blocked() -> None:
+    class ITPHttp:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def get_text(self, *, url, params=None, headers=None):
+            self.calls.append(url)
+            if "nia.nih.gov" in url:
+                raise ToolExecutionError(code="UPSTREAM_ERROR", message="HTTP 405 from upstream source")
+            if "phenome.jax.org" in url:
+                return ("<html><body>Median lifespan improved, p = 0.03</body></html>", {})
+            raise AssertionError(f"Unhandled url: {url}")
+
+    tools = build_longevity_tools(ITPHttp())
+    out = _tool(tools, "itp_fetch_survival_summary").handler({"url": "https://www.nia.nih.gov/itp/example"}, None)
+
+    assert out["data"]["fallback_used"] is True
+    assert out["data"]["blocked_by_waf"] is True
+    assert out["data"]["source_host"] == "phenome.jax.org"
+    assert out["data"]["url"] == "https://phenome.jax.org/itp/surv/MetRapa/C2011"
+    assert out["warnings"]
+
+
+def test_itp_summary_uses_requested_url_when_not_blocked() -> None:
+    class ITPHttp:
+        def get_text(self, *, url, params=None, headers=None):
+            assert url == "https://phenome.jax.org/itp/surv/MetRapa/C2011"
+            return ("<html><body>p < 0.05</body></html>", {})
+
+    tools = build_longevity_tools(ITPHttp())
+    out = _tool(tools, "itp_fetch_survival_summary").handler(
+        {"url": "https://phenome.jax.org/itp/surv/MetRapa/C2011"},
+        None,
+    )
+
+    assert out["data"]["fallback_used"] is False
+    assert out["data"]["blocked_by_waf"] is False
+    assert out["data"]["source_host"] == "phenome.jax.org"
+    assert out["data"]["requested_url"] == "https://phenome.jax.org/itp/surv/MetRapa/C2011"
+    assert out["warnings"] == []
+
+
 def test_chebi_v2_mapping_and_epistemonikos_documents_endpoints() -> None:
     class OptionalHttp:
         def __init__(self) -> None:
