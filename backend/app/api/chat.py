@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.core import AgentCore, normalize_provider
-from app.agent.tools.builtin import create_builtin_registry
+from app.agent.tools.science_registry import create_science_registry
 from app.config import get_settings
 from app.persistence.db import SessionLocal, get_session
 from app.persistence.service import ChatStore
@@ -121,7 +121,7 @@ async def chat_send(payload: ChatSendRequest, session: AsyncSession = Depends(ge
     store = ChatStore(session)
     thread = await store.ensure_thread(payload.thread_id)
 
-    core = AgentCore(settings=settings, store=store, tools=create_builtin_registry())
+    core = AgentCore(settings=settings, store=store, tools=create_science_registry(settings))
     try:
         provider = normalize_provider(payload.provider)
     except ValueError as exc:
@@ -207,7 +207,7 @@ async def ws_chat(
 
             async with SessionLocal() as run_session:
                 run_store = ChatStore(run_session)
-                core = AgentCore(settings=settings, store=run_store, tools=create_builtin_registry())
+                core = AgentCore(settings=settings, store=run_store, tools=create_science_registry(settings))
 
                 async def emit(event: dict[str, Any]) -> None:
                     await websocket.send_json(event)

@@ -13,6 +13,7 @@ backend/.venv_local/
 # SQLite
 *.db
 backend/logs/
+backend/artifacts/
 
 # Node
 frontend/node_modules/

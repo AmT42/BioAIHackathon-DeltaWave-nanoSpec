@@ -5,7 +5,7 @@ def test_calc_tool_success() -> None:
     registry = create_builtin_registry()
     result = registry.execute("calc", {"expression": "(2+3)*4"})
     assert result["status"] == "success"
-    assert result["output"]["value"] == 20.0
+    assert result["output"]["data"]["value"] == 20.0
 
 
 def test_unknown_tool_returns_error() -> None:
