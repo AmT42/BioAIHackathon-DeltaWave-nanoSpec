@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from app.config import Settings
@@ -15,12 +16,50 @@ def _request_id(headers: dict[str, str]) -> str | None:
     return headers.get("x-request-id") or headers.get("nctid")
 
 
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _parse_trial_date(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    normalized = raw.replace("Z", "+00:00")
+    for fmt in ("%Y-%m-%d", "%Y-%m", "%Y"):
+        try:
+            parsed = datetime.strptime(raw, fmt)
+            return parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    try:
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _is_older_than(date_value: Any, threshold_days: int) -> bool:
+    parsed = _parse_trial_date(date_value)
+    if parsed is None:
+        return False
+    age_days = (datetime.now(timezone.utc) - parsed).days
+    return age_days >= max(0, threshold_days)
+
+
 def _compact_trial(study: dict[str, Any]) -> dict[str, Any]:
     protocol = study.get("protocolSection") or {}
     ident = protocol.get("identificationModule") or {}
     status_module = protocol.get("statusModule") or {}
     design = protocol.get("designModule") or {}
     outcomes = protocol.get("outcomesModule") or {}
+
+    completion_date = (status_module.get("completionDateStruct") or {}).get("date")
+    primary_completion_date = (status_module.get("primaryCompletionDateStruct") or {}).get("date")
 
     nct_id = ident.get("nctId") or study.get("nctId")
     return {
@@ -32,6 +71,8 @@ def _compact_trial(study: dict[str, Any]) -> dict[str, Any]:
         "phases": list(design.get("phases") or []),
         "enrollment": (design.get("enrollmentInfo") or {}).get("count"),
         "primary_outcomes": list(outcomes.get("primaryOutcomes") or []),
+        "primary_completion_date": primary_completion_date,
+        "completion_date": completion_date,
         "has_results": bool(study.get("hasResults")),
     }
 
@@ -41,7 +82,7 @@ def build_trial_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSp
         intr = str(payload.get("intr", "")).strip() or None
         cond = str(payload.get("cond", "")).strip() or None
         query_term = str(payload.get("query_term", "")).strip() or None
-        page_size = min(max(int(payload.get("page_size", 20)), 1), 100)
+        page_size = min(max(_safe_int(payload.get("page_size", 20), 20), 1), 100)
         page_token = str(payload.get("page_token", "")).strip() or None
 
         if not intr and not cond and not query_term:
@@ -128,7 +169,8 @@ def build_trial_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSp
         if not isinstance(nct_ids, list) or not nct_ids:
             raise ToolExecutionError(code="VALIDATION_ERROR", message="'nct_ids' must be a non-empty list")
 
-        openalex_per_nct = min(max(int(payload.get("openalex_per_nct", 10)), 1), 50)
+        openalex_per_nct = min(max(_safe_int(payload.get("openalex_per_nct", 10), 10), 1), 50)
+        evidence_age_days = max(_safe_int(payload.get("evidence_age_days", 365), 365), 0)
         trials = payload.get("trials") or []
         trial_by_nct: dict[str, dict[str, Any]] = {}
         if isinstance(trials, list):
@@ -139,70 +181,112 @@ def build_trial_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSp
         links: list[dict[str, Any]] = []
         warnings: list[str] = []
 
-        for nct in [str(item).strip() for item in nct_ids if str(item).strip()]:
+        for nct in [str(item).strip().upper() for item in nct_ids if str(item).strip()]:
+            per_nct_warnings: list[str] = []
+            strict_pmids: list[str] = []
+            fallback_pmids: list[str] = []
+
+            strict_query = f'"{nct}"[si]'
+            fallback_query = f"{nct}[All Fields]"
+
             pubmed_params: dict[str, Any] = {
                 "db": "pubmed",
-                "term": f'"{nct}"[si] OR {nct}[All Fields]',
                 "retmode": "json",
                 "retmax": 20,
             }
             if settings.pubmed_api_key:
                 pubmed_params["api_key"] = settings.pubmed_api_key
 
-            pubmed_data, _ = http.get_json(
-                url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
-                params=pubmed_params,
-            )
-            pmids = (((pubmed_data or {}).get("esearchresult") or {}).get("idlist") or [])
+            try:
+                strict_data, _ = http.get_json(
+                    url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+                    params={**pubmed_params, "term": strict_query},
+                )
+                strict_pmids = list((((strict_data or {}).get("esearchresult") or {}).get("idlist") or []))
+            except ToolExecutionError as exc:
+                per_nct_warnings.append(f"pubmed_strict_failed: {exc.message}")
+
+            if not strict_pmids:
+                try:
+                    fallback_data, _ = http.get_json(
+                        url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+                        params={**pubmed_params, "term": fallback_query},
+                    )
+                    fallback_pmids = list((((fallback_data or {}).get("esearchresult") or {}).get("idlist") or []))
+                except ToolExecutionError as exc:
+                    per_nct_warnings.append(f"pubmed_fallback_failed: {exc.message}")
+
+            pmids = strict_pmids or fallback_pmids
 
             openalex_ids: list[str] = []
             if settings.openalex_api_key:
-                oa_data, _ = http.get_json(
-                    url="https://api.openalex.org/works",
-                    params={
-                        "search": nct,
-                        "per-page": openalex_per_nct,
-                        "api_key": settings.openalex_api_key,
-                    },
-                )
-                for work in list((oa_data or {}).get("results") or []):
-                    work_id = work.get("id")
-                    if work_id:
-                        openalex_ids.append(str(work_id))
+                try:
+                    oa_data, _ = http.get_json(
+                        url="https://api.openalex.org/works",
+                        params={
+                            "search": nct,
+                            "per-page": openalex_per_nct,
+                            "api_key": settings.openalex_api_key,
+                        },
+                    )
+                    for work in list((oa_data or {}).get("results") or []):
+                        work_id = work.get("id")
+                        if work_id:
+                            openalex_ids.append(str(work_id))
+                except ToolExecutionError as exc:
+                    per_nct_warnings.append(f"openalex_failed: {exc.message}")
+
+            trial = trial_by_nct.get(nct)
+            flag = "no_mismatch_signal"
+            status = None
+            has_results = False
+            completion_date = None
+
+            if not trial:
+                flag = "insufficient_trial_context"
+                per_nct_warnings.append("Trial context missing; mismatch classification is conservative.")
             else:
-                warnings.append("OpenAlex key missing; linker used PubMed only.")
+                status = str(trial.get("overall_status") or "") or None
+                has_results = bool(trial.get("has_results"))
+                completion_date = trial.get("completion_date") or trial.get("primary_completion_date")
+                completed = bool(status and status.upper() == "COMPLETED")
+                has_pubmed_publication = bool(pmids)
 
-            trial = trial_by_nct.get(nct, {})
-            status = str(trial.get("overall_status") or "")
-            has_results = bool(trial.get("has_results"))
+                if completed and not has_pubmed_publication:
+                    if completion_date and _is_older_than(completion_date, evidence_age_days):
+                        flag = "possible_unpublished_completed_trial"
+                    elif not completion_date:
+                        flag = "insufficient_trial_context"
+                    else:
+                        flag = "no_mismatch_signal"
+                elif has_results and not has_pubmed_publication:
+                    flag = "registry_results_without_publication"
 
-            flag: str | None = None
-            if status.upper() == "COMPLETED" and not pmids and not openalex_ids:
-                flag = "completed_but_unpublished_possible"
-            elif has_results and not pmids and not openalex_ids:
-                flag = "registry_results_without_publication"
-            elif (pmids or openalex_ids) and not status:
-                flag = "publication_without_trial_context"
+            if per_nct_warnings:
+                warnings.extend(f"{nct}: {item}" for item in per_nct_warnings)
 
             links.append(
                 {
                     "nct_id": nct,
-                    "status": status or None,
+                    "status": status,
                     "has_results": has_results,
+                    "completion_date": completion_date,
                     "pmids": pmids,
+                    "pubmed_match_mode": "strict" if strict_pmids else ("fallback" if fallback_pmids else "none"),
                     "openalex_ids": openalex_ids,
                     "counts": {
                         "pmid_count": len(pmids),
                         "openalex_count": len(openalex_ids),
                     },
                     "flag": flag,
+                    "warnings": per_nct_warnings,
                 }
             )
 
         return make_tool_output(
             source="trial_publication_linker",
             summary=f"Linked {len(links)} trial(s) to publication evidence.",
-            data={"links": links},
+            data={"links": links, "evidence_age_days": evidence_age_days},
             ids=[item.get("nct_id") for item in links if item.get("nct_id")],
             warnings=warnings,
             ctx=ctx,
@@ -247,6 +331,7 @@ def build_trial_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSp
                     "nct_ids": {"type": "array", "items": {"type": "string"}},
                     "trials": {"type": "array", "items": {"type": "object"}},
                     "openalex_per_nct": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
+                    "evidence_age_days": {"type": "integer", "minimum": 0, "default": 365},
                 },
                 "required": ["nct_ids"],
             },

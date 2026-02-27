@@ -78,10 +78,13 @@ def build_claude_messages(events: list[CanonicalEventView]) -> list[dict[str, An
             continue
 
         if event.kind == ConversationEventKind.TOOL_RESULT:
-            payload = event.content.get("output")
-            if event.content.get("status") != "success":
-                payload = event.content.get("error", payload)
-            payload_text = _coerce_text(payload)
+            envelope_payload = {
+                "status": event.content.get("status"),
+                "output": event.content.get("output"),
+                "error": event.content.get("error"),
+                "tool_name": event.content.get("tool_name"),
+            }
+            payload_text = _coerce_text(envelope_payload)
             tool_use_id = event.content.get("tool_call_id") or event.tool_call_id
             block = {
                 "type": "tool_result",
@@ -371,12 +374,13 @@ def build_gemini_openai_messages(
         if event.kind == ConversationEventKind.TOOL_RESULT:
             flush_tool_calls()
             tool_call_id = event.content.get("tool_call_id") or event.tool_call_id
-            payload = event.content.get("output")
-            if event.content.get("status") != "success":
-                payload = event.content.get("error", payload)
-            if payload is None:
-                payload = {"status": event.content.get("status")}
-            payload_text = _coerce_text(payload)
+            envelope_payload = {
+                "status": event.content.get("status"),
+                "output": event.content.get("output"),
+                "error": event.content.get("error"),
+                "tool_name": event.content.get("tool_name"),
+            }
+            payload_text = _coerce_text(envelope_payload)
             if tool_call_id and str(tool_call_id) in seen_tool_call_ids:
                 tool_msg: dict[str, Any] = {
                     "role": "tool",

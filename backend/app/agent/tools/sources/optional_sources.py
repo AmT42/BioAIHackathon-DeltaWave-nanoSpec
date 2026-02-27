@@ -269,7 +269,7 @@ def build_optional_source_tools(settings: Settings, http: SimpleHttpClient) -> l
             ctx=ctx,
         )
 
-    return [
+    tools: list[ToolSpec] = [
         ToolSpec(
             name="chembl_search_molecules",
             description="Search ChEMBL molecules by free-text query.",
@@ -350,30 +350,37 @@ def build_optional_source_tools(settings: Settings, http: SimpleHttpClient) -> l
             handler=semanticscholar_get_papers,
             source="semanticscholar",
         ),
-        ToolSpec(
-            name="epistemonikos_search_reviews",
-            description="Search Epistemonikos systematic reviews (requires API key).",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "page": {"type": "integer", "minimum": 1, "default": 1},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
-                },
-                "required": ["query"],
-            },
-            handler=epistemonikos_search_reviews,
-            source="epistemonikos",
-        ),
-        ToolSpec(
-            name="epistemonikos_get_review",
-            description="Fetch one Epistemonikos review by review ID (requires API key).",
-            input_schema={
-                "type": "object",
-                "properties": {"review_id": {"type": "string"}},
-                "required": ["review_id"],
-            },
-            handler=epistemonikos_get_review,
-            source="epistemonikos",
-        ),
     ]
+    if settings.epistemonikos_api_key:
+        tools.extend(
+            [
+                ToolSpec(
+                    name="epistemonikos_search_reviews",
+                    description="Search Epistemonikos systematic reviews (requires API key).",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "page": {"type": "integer", "minimum": 1, "default": 1},
+                            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                        },
+                        "required": ["query"],
+                    },
+                    handler=epistemonikos_search_reviews,
+                    source="epistemonikos",
+                ),
+                ToolSpec(
+                    name="epistemonikos_get_review",
+                    description="Fetch one Epistemonikos review by review ID (requires API key).",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"review_id": {"type": "string"}},
+                        "required": ["review_id"],
+                    },
+                    handler=epistemonikos_get_review,
+                    source="epistemonikos",
+                ),
+            ]
+        )
+
+    return tools

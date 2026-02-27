@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Literal
@@ -30,6 +31,10 @@ from app.trace_normalizer import build_trace_v1
 
 ProviderName = Literal["gemini"]
 Emitter = Callable[[dict[str, Any]], Awaitable[None]]
+_EVIDENCE_INTENT_PATTERN = re.compile(
+    r"\\b(evidence|confidence|report|grade|grading|literature|paper|trial|longevity)\\b",
+    flags=re.IGNORECASE,
+)
 
 
 def _utc_iso() -> str:
@@ -47,6 +52,10 @@ def _thinking_title(text: str, max_words: int = 10) -> str | None:
     if len(words) > max_words:
         title += "..."
     return title
+
+
+def _is_evidence_intent(text: str) -> bool:
+    return bool(_EVIDENCE_INTENT_PATTERN.search(text or ""))
 
 
 class AgentCore:
@@ -108,12 +117,21 @@ class AgentCore:
 
         collected_blocks: list[dict[str, Any]] = []
         last_assistant_message_id: str | None = None
+        evidence_intent = _is_evidence_intent(user_message)
+        guardrail_retry_used = False
+        guardrail_hint: str | None = None
+        completed_macro_tools: set[str] = set()
+        last_retrieve_bundle: dict[str, Any] | None = None
+        last_grade_bundle: dict[str, Any] | None = None
 
         for _ in range(max_iterations):
             request_index += 1
 
             canonical_events = await self.store.get_canonical_events(thread_id)
             provider_messages = build_gemini_openai_messages(canonical_events, system_prompt=DEFAULT_SYSTEM_PROMPT)
+            if guardrail_hint:
+                provider_messages.append({"role": "user", "content": guardrail_hint})
+                guardrail_hint = None
             tool_schemas = self.tools.openai_schemas()
 
             request_payload: dict[str, Any] = {
@@ -467,10 +485,44 @@ class AgentCore:
             )
 
             if not normalized_tool_calls:
+                if evidence_intent and not guardrail_retry_used and "evidence_generate_report" not in completed_macro_tools:
+                    guardrail_retry_used = True
+                    guardrail_hint = (
+                        "Use tools to produce an auditable evidence result. "
+                        "Execute this chain: evidence_retrieve_bundle -> evidence_grade_bundle -> evidence_generate_report."
+                    )
+                    continue
                 break
 
             for tc in normalized_tool_calls:
                 tool_segment = tool_segment_by_call_id[tc.id]
+                execution_input = dict(tc.input or {})
+                precondition_error: dict[str, Any] | None = None
+
+                if tc.name == "evidence_grade_bundle":
+                    if last_retrieve_bundle is None and "evidence_retrieve_bundle" not in completed_macro_tools:
+                        precondition_error = {
+                            "code": "PRECONDITION_FAILED",
+                            "message": "evidence_grade_bundle requires a prior evidence_retrieve_bundle result.",
+                            "retryable": True,
+                            "details": {"required_tool": "evidence_retrieve_bundle"},
+                        }
+                    elif "bundle" not in execution_input and last_retrieve_bundle is not None:
+                        execution_input["bundle"] = last_retrieve_bundle
+
+                if tc.name == "evidence_generate_report":
+                    if last_grade_bundle is None and "evidence_grade_bundle" not in completed_macro_tools:
+                        precondition_error = {
+                            "code": "PRECONDITION_FAILED",
+                            "message": "evidence_generate_report requires a prior evidence_grade_bundle result.",
+                            "retryable": True,
+                            "details": {"required_tool": "evidence_grade_bundle"},
+                        }
+                    if "bundle" not in execution_input and last_retrieve_bundle is not None:
+                        execution_input["bundle"] = last_retrieve_bundle
+                    if "grade" not in execution_input and last_grade_bundle is not None:
+                        execution_input["grade"] = last_grade_bundle
+
                 await emit(
                     {
                         "type": "main_agent_tool_start",
@@ -479,7 +531,7 @@ class AgentCore:
                         "segment_index": tool_segment,
                         "tool_use_id": tc.id,
                         "tool_name": tc.name,
-                        "arguments": tc.input,
+                        "arguments": execution_input,
                     }
                 )
 
@@ -487,26 +539,62 @@ class AgentCore:
                     thread_id=thread_id,
                     tool_call_id=tc.id,
                     tool_name=tc.name,
-                    input_payload=tc.input,
+                    input_payload=execution_input,
                     provider_specific_fields=tc.provider_specific_fields,
                     extra_content=tc.extra_content,
                     visible_to_model=True,
                 )
 
                 started_at = _utc_iso()
-                tool_result = self.tools.execute(
-                    tc.name,
-                    tc.input,
-                    ctx=ToolContext(
-                        thread_id=thread_id,
-                        run_id=run_id,
-                        request_index=request_index,
-                        user_msg_index=user_msg_index,
-                        tool_use_id=tc.id,
-                        tool_name=tc.name,
-                    ),
-                )
+                if precondition_error is not None:
+                    tool_result = {
+                        "status": "error",
+                        "error": precondition_error,
+                    }
+                else:
+                    try:
+                        tool_result = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                self.tools.execute,
+                                tc.name,
+                                execution_input,
+                                ctx=ToolContext(
+                                    thread_id=thread_id,
+                                    run_id=run_id,
+                                    request_index=request_index,
+                                    user_msg_index=user_msg_index,
+                                    tool_use_id=tc.id,
+                                    tool_name=tc.name,
+                                ),
+                            ),
+                            timeout=self.settings.tool_execution_timeout_seconds,
+                        )
+                    except asyncio.TimeoutError:
+                        tool_result = {
+                            "status": "error",
+                            "error": {
+                                "code": "TIMEOUT",
+                                "message": (
+                                    f"Tool '{tc.name}' exceeded timeout "
+                                    f"({self.settings.tool_execution_timeout_seconds}s)."
+                                ),
+                                "retryable": True,
+                                "details": {"timeout_seconds": self.settings.tool_execution_timeout_seconds},
+                            },
+                        }
                 finished_at = _utc_iso()
+
+                if tool_result.get("status") == "success":
+                    output_payload = tool_result.get("output")
+                    output_data = output_payload.get("data") if isinstance(output_payload, dict) else None
+                    if tc.name == "evidence_retrieve_bundle" and isinstance(output_data, dict):
+                        last_retrieve_bundle = output_data
+                        completed_macro_tools.add(tc.name)
+                    elif tc.name == "evidence_grade_bundle" and isinstance(output_data, dict):
+                        last_grade_bundle = output_data
+                        completed_macro_tools.add(tc.name)
+                    elif tc.name == "evidence_generate_report":
+                        completed_macro_tools.add(tc.name)
 
                 await emit(
                     {
@@ -538,7 +626,7 @@ class AgentCore:
                     user_index=user_msg_index,
                     request_index=request_index,
                     run_id=run_id,
-                    arguments=tc.input,
+                    arguments=execution_input,
                     result=tool_result,
                     status=tool_result.get("status", "unknown"),
                     error=(tool_result.get("error") or {}).get("message")

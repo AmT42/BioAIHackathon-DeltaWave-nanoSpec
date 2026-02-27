@@ -53,6 +53,7 @@ def make_tool_output(
             "source": source,
             "request_id": request_id,
             "retrieved_at": utc_iso(),
+            "data_schema_version": "v1",
             "lineage": _lineage_from_ctx(ctx),
         },
     }
@@ -88,6 +89,7 @@ def normalize_tool_output(
         source_meta.setdefault("source", source)
         source_meta.setdefault("request_id", None)
         source_meta.setdefault("retrieved_at", utc_iso())
+        source_meta.setdefault("data_schema_version", "v1")
         source_meta.setdefault("lineage", _lineage_from_ctx(ctx))
         normalized["source_meta"] = source_meta
         return normalized

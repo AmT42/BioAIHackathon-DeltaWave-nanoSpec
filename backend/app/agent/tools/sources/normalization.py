@@ -505,6 +505,7 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             if len(deduped) >= max_synonyms:
                 break
 
+        pubmed_terms = deduped[:]
         openalex_terms = deduped[:]
         ctgov_terms = deduped[: min(5, len(deduped))]
         safety_terms = deduped[:1]
@@ -515,6 +516,7 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             summary=f"Built controlled search term set with {len(deduped)} term(s).",
             data={
                 "terms": {
+                    "pubmed": pubmed_terms,
                     "openalex": openalex_terms,
                     "clinicaltrials": ctgov_terms,
                     "safety": safety_terms,

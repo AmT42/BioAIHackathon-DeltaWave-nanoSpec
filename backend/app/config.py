@@ -36,6 +36,7 @@ class Settings:
     source_cache_root: Path
     tool_http_timeout_seconds: int
     tool_http_max_retries: int
+    tool_execution_timeout_seconds: int
     tool_http_user_agent: str
     openalex_api_key: str | None
     pubmed_api_key: str | None
@@ -43,6 +44,8 @@ class Settings:
     epistemonikos_api_key: str | None
     enable_normalization_tools: bool
     enable_literature_tools: bool
+    enable_pubmed_tools: bool
+    enable_openalex_tools: bool
     enable_trial_tools: bool
     enable_safety_tools: bool
     enable_longevity_tools: bool
@@ -83,6 +86,10 @@ def get_settings() -> Settings:
         os.getenv("SOURCE_CACHE_ROOT", str(artifacts_root / "cache" / "sources"))
     ).expanduser().resolve()
 
+    enable_literature_tools = _env_bool("ENABLE_LITERATURE_TOOLS", default=True)
+    enable_pubmed_tools = _env_bool("ENABLE_PUBMED_TOOLS", default=enable_literature_tools)
+    enable_openalex_tools = _env_bool("ENABLE_OPENALEX_TOOLS", default=enable_literature_tools)
+
     return Settings(
         database_url=os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./chat.db"),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
@@ -97,13 +104,16 @@ def get_settings() -> Settings:
         source_cache_root=source_cache_root,
         tool_http_timeout_seconds=_env_int("TOOL_HTTP_TIMEOUT_SECONDS", default=20),
         tool_http_max_retries=_env_int("TOOL_HTTP_MAX_RETRIES", default=2),
+        tool_execution_timeout_seconds=_env_int("TOOL_EXECUTION_TIMEOUT_SECONDS", default=45) or 45,
         tool_http_user_agent=os.getenv("TOOL_HTTP_USER_AGENT", "hackathon-agent-core/0.1"),
         openalex_api_key=os.getenv("OPENALEX_API_KEY"),
         pubmed_api_key=os.getenv("PUBMED_API_KEY"),
         semanticscholar_api_key=os.getenv("SEMANTICSCHOLAR_API_KEY"),
         epistemonikos_api_key=os.getenv("EPISTEMONIKOS_API_KEY"),
         enable_normalization_tools=_env_bool("ENABLE_NORMALIZATION_TOOLS", default=True),
-        enable_literature_tools=_env_bool("ENABLE_LITERATURE_TOOLS", default=True),
+        enable_literature_tools=enable_literature_tools,
+        enable_pubmed_tools=enable_pubmed_tools,
+        enable_openalex_tools=enable_openalex_tools,
         enable_trial_tools=_env_bool("ENABLE_TRIAL_TOOLS", default=True),
         enable_safety_tools=_env_bool("ENABLE_SAFETY_TOOLS", default=True),
         enable_longevity_tools=_env_bool("ENABLE_LONGEVITY_TOOLS", default=True),
