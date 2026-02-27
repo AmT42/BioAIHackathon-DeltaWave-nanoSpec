@@ -7,6 +7,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from app.agent.tools.artifacts import (
     source_cache_dir,
@@ -26,9 +27,8 @@ def _utc_stamp() -> str:
 
 def _candidate_drugage_urls() -> list[str]:
     return [
-        "https://genomics.senescence.info/static/data/drugage.csv",
-        "https://genomics.senescence.info/static/download/drugage.csv",
-        "https://genomics.senescence.info/drugs/DrugAge.csv",
+        "https://genomics.senescence.info/drugs/dataset.zip",
+        "https://hagr.ageing-map.org/drugs/dataset.zip",
     ]
 
 
@@ -60,14 +60,18 @@ def _rows_from_file(path: Path) -> list[dict[str, Any]]:
         text = path.read_text(encoding="utf-8", errors="replace")
 
     reader = csv.DictReader(io.StringIO(text))
-    return [dict(row) for row in reader]
+    normalized_rows: list[dict[str, Any]] = []
+    for row in reader:
+        normalized_rows.append({str(k).strip().lower(): v for k, v in dict(row).items()})
+    return normalized_rows
 
 
 def _find_value(row: dict[str, Any], candidates: list[str]) -> str | None:
     lower = {str(k).strip().lower(): v for k, v in row.items()}
     for key in candidates:
-        if key in lower and str(lower[key]).strip():
-            return str(lower[key]).strip()
+        normalized_key = str(key).strip().lower()
+        if normalized_key in lower and str(lower[normalized_key]).strip():
+            return str(lower[normalized_key]).strip()
     return None
 
 
@@ -89,6 +93,7 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
 
         last_error: str | None = None
         saved_path: Path | None = None
+        source_url: str | None = None
         for url in urls:
             try:
                 data, headers = http.get_bytes(url=url)
@@ -96,15 +101,33 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
                 file_name = f"drugage_{_utc_stamp()}.{ext}"
                 saved_path = cache_root / file_name
                 saved_path.write_bytes(data)
+                source_url = url
                 break
             except Exception as exc:  # pragma: no cover - best effort retry across urls
                 last_error = str(exc)
 
         if saved_path is None:
+            stale = _latest_file(cache_root, "drugage")
+            if stale and stale.exists():
+                stale_rows = _rows_from_file(stale)
+                return make_tool_output(
+                    source="hagr_drugage",
+                    summary=f"Refresh failed; using stale DrugAge cache with {len(stale_rows)} row(s).",
+                    data={
+                        "dataset": "drugage",
+                        "local_path": str(stale),
+                        "rows": len(stale_rows),
+                        "stale_cache": True,
+                        "source_url": None,
+                    },
+                    ids=[str(stale)],
+                    warnings=["Refresh failed; served stale cache snapshot.", f"Last refresh error: {last_error or 'unknown'}"],
+                    ctx=ctx,
+                )
             raise ToolExecutionError(
                 code="UPSTREAM_ERROR",
                 message="Failed to refresh DrugAge dataset from all candidate URLs",
-                details={"last_error": last_error},
+                details={"last_error": last_error, "candidate_urls": urls},
             )
 
         rows = _rows_from_file(saved_path)
@@ -120,6 +143,8 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
                 "dataset": "drugage",
                 "local_path": str(saved_path),
                 "rows": len(rows),
+                "stale_cache": False,
+                "source_url": source_url,
             },
             ids=[str(saved_path)],
             artifacts=artifacts,
@@ -157,7 +182,7 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
         q = compound.lower()
         matches: list[dict[str, Any]] = []
         for row in rows:
-            compound_name = _find_value(row, ["compound", "drug", "name", "intervention"]) or ""
+            compound_name = _find_value(row, ["compound_name", "compound", "drug", "name", "intervention"]) or ""
             species = _find_value(row, ["species", "organism", "model"]) or ""
             if q not in compound_name.lower():
                 continue
@@ -168,18 +193,26 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
                     "compound": compound_name,
                     "species": species,
                     "strain": _find_value(row, ["strain", "background"]),
-                    "sex": _find_value(row, ["sex"]),
+                    "sex": _find_value(row, ["sex", "gender"]),
                     "dose": _find_value(row, ["dose", "dosage"]),
                     "avg_median_lifespan_change_pct": _find_value(
                         row,
                         [
+                            "avg_lifespan_change_percent",
                             "average lifespan change (%)",
                             "avg lifespan change (%)",
                             "median lifespan change (%)",
                         ],
                     ),
-                    "max_lifespan_change_pct": _find_value(row, ["max lifespan change (%)", "maximum lifespan change (%)"]),
-                    "reference": _find_value(row, ["pmid", "reference", "citation"]),
+                    "max_lifespan_change_pct": _find_value(
+                        row,
+                        [
+                            "max_lifespan_change_percent",
+                            "max lifespan change (%)",
+                            "maximum lifespan change (%)",
+                        ],
+                    ),
+                    "reference": _find_value(row, ["pubmed_id", "pmid", "reference", "citation"]),
                     "raw": row,
                 }
             )
@@ -205,25 +238,47 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
         if not url:
             raise ToolExecutionError(code="VALIDATION_ERROR", message="'url' is required")
 
-        html, _ = http.get_text(url=url)
+        source_host = str(urlparse(url).hostname or "").lower()
+        blocked_hint = "NIA host appears blocked by anti-bot controls. Use a JAX ITP URL like https://phenome.jax.org/itp/surv/MetRapa/C2011."
+        try:
+            html, _ = http.get_text(url=url)
+        except ToolExecutionError as exc:
+            if source_host.endswith("nia.nih.gov"):
+                raise ToolExecutionError(
+                    code="UPSTREAM_ERROR",
+                    message=blocked_hint,
+                    details={"source_host": source_host, "blocked_by_waf": True, "upstream_error": exc.message},
+                ) from exc
+            raise
+
+        html_lower = html.lower()
+        if source_host.endswith("nia.nih.gov") and ("captcha" in html_lower or "cloudfront" in html_lower):
+            raise ToolExecutionError(
+                code="UPSTREAM_ERROR",
+                message=blocked_hint,
+                details={"source_host": source_host, "blocked_by_waf": True},
+            )
+
         artifacts: list[dict[str, Any]] = []
         raw_html_artifact = write_text_file_artifact(ctx, "itp_survival_summary.html", html, subdir="raw") if ctx else None
         if raw_html_artifact:
             artifacts.append(raw_html_artifact)
 
-        text = re.sub(r"<script[\\s\\S]*?</script>", " ", html, flags=re.IGNORECASE)
-        text = re.sub(r"<style[\\s\\S]*?</style>", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.IGNORECASE)
+        text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.IGNORECASE)
         text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"\\s+", " ", text).strip()
+        text = re.sub(r"\s+", " ", text).strip()
         preview = text[:2500]
 
-        p_values = re.findall(r"p\\s*[=<>]\\s*([0-9]*\\.?[0-9]+)", text, flags=re.IGNORECASE)
+        p_values = re.findall(r"p\s*[=<>]\s*([0-9]*\.?[0-9]+)", text, flags=re.IGNORECASE)
 
         return make_tool_output(
             source="itp",
             summary="Fetched ITP survival summary page.",
             data={
                 "url": url,
+                "source_host": source_host,
+                "blocked_by_waf": False,
                 "text_preview": preview,
                 "p_values": p_values[:20],
             },

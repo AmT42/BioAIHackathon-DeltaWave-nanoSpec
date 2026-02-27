@@ -34,6 +34,42 @@ def _unwrap_tool_data(value: Any) -> dict[str, Any]:
     return value
 
 
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _compact_ols_term(term: dict[str, Any], *, ontology_hint: str | None = None) -> dict[str, Any]:
+    annotation = term.get("annotation") if isinstance(term.get("annotation"), dict) else {}
+    xrefs = _as_list(annotation.get("database_cross_reference")) if annotation else []
+    synonyms = _as_list(term.get("synonyms"))
+    ontology_name = str(term.get("ontology_name") or ontology_hint or "").strip().lower() or None
+    return {
+        "obo_id": term.get("obo_id"),
+        "label": term.get("label"),
+        "iri": term.get("iri"),
+        "ontology": ontology_name,
+        "synonyms": [str(item) for item in synonyms if str(item).strip()],
+        "xrefs": [str(item) for item in xrefs if str(item).strip()],
+    }
+
+
+def _first_ols_term(payload: dict[str, Any]) -> dict[str, Any] | None:
+    embedded = payload.get("_embedded") if isinstance(payload, dict) else None
+    if isinstance(embedded, dict):
+        terms = embedded.get("terms")
+        if isinstance(terms, list) and terms:
+            first = terms[0]
+            if isinstance(first, dict):
+                return first
+    if isinstance(payload, dict) and payload.get("iri") and payload.get("label"):
+        return payload
+    return None
+
+
 def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
     def rxnorm_resolve(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
         term = _require_text(payload, "term")
@@ -239,39 +275,97 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
         obo_id = str(payload.get("obo_id", "")).strip()
         ontology = str(payload.get("ontology", "")).strip().lower()
 
-        if iri and ontology:
-            encoded = parse.quote(iri, safe="")
-            url = f"https://www.ebi.ac.uk/ols4/api/ontologies/{parse.quote(ontology)}/terms/{encoded}"
-            data, headers = http.get_json(url=url)
-            term = {
-                "obo_id": data.get("obo_id"),
-                "label": data.get("label"),
-                "iri": data.get("iri"),
-                "ontology": ontology,
-                "synonyms": list(data.get("synonyms") or []),
-                "xrefs": list(data.get("annotation", {}).get("database_cross_reference", []) or []),
-            }
-            return make_tool_output(
-                source="ols",
-                summary="Fetched ontology term.",
-                data={"term": term},
-                ids=[term.get("obo_id")],
-                request_id=_request_id(headers),
-                ctx=ctx,
-            )
-
-        if not obo_id:
+        if not iri and not obo_id:
             raise ToolExecutionError(code="VALIDATION_ERROR", message="Provide either ('iri' and 'ontology') or 'obo_id'")
 
-        search_payload = ols_search_terms({"q": obo_id, "rows": 5, "ontologies": [ontology] if ontology else []}, ctx)
-        hits = search_payload.get("data", {}).get("hits") or []
-        exact = next((item for item in hits if (item.get("obo_id") or "").lower() == obo_id.lower()), hits[0] if hits else None)
+        request_headers: dict[str, str] = {}
+        warnings: list[str] = []
+        term: dict[str, Any] | None = None
+        tried_paths: list[str] = []
+
+        if iri and ontology:
+            tried_paths.append("ontology_terms_by_iri")
+            try:
+                data, headers = http.get_json(
+                    url=f"https://www.ebi.ac.uk/ols4/api/ontologies/{parse.quote(ontology)}/terms",
+                    params={"iri": iri},
+                )
+                request_headers = headers or {}
+                first = _first_ols_term(data or {})
+                if isinstance(first, dict):
+                    term = _compact_ols_term(first, ontology_hint=ontology)
+            except ToolExecutionError:
+                warnings.append(f"Ontology scoped IRI lookup failed for '{ontology}'.")
+
+        if term is None and iri:
+            tried_paths.append("global_terms_by_iri")
+            try:
+                data, headers = http.get_json(
+                    url="https://www.ebi.ac.uk/ols4/api/terms",
+                    params={"iri": iri},
+                )
+                request_headers = headers or request_headers
+                first = _first_ols_term(data or {})
+                if isinstance(first, dict):
+                    term = _compact_ols_term(first, ontology_hint=ontology or None)
+            except ToolExecutionError:
+                warnings.append("Global IRI lookup failed.")
+
+        if term is None and obo_id:
+            tried_paths.append("search_by_obo_id")
+            search_data, headers = http.get_json(
+                url="https://www.ebi.ac.uk/ols4/api/search",
+                params={
+                    "q": obo_id,
+                    "rows": 10,
+                    "ontology": ontology or None,
+                },
+            )
+            request_headers = headers or request_headers
+            docs = (((search_data or {}).get("response") or {}).get("docs") or [])
+            exact = next((item for item in docs if str(item.get("obo_id") or "").lower() == obo_id.lower()), None)
+            best = exact or (docs[0] if docs else None)
+            if isinstance(best, dict):
+                best_iri = str(best.get("iri") or "").strip()
+                best_onto = str(best.get("ontology_name") or ontology).strip().lower()
+                if best_iri:
+                    try:
+                        data, headers = http.get_json(
+                            url=(
+                                f"https://www.ebi.ac.uk/ols4/api/ontologies/{parse.quote(best_onto)}/terms"
+                                if best_onto
+                                else "https://www.ebi.ac.uk/ols4/api/terms"
+                            ),
+                            params={"iri": best_iri},
+                        )
+                        request_headers = headers or request_headers
+                        first = _first_ols_term(data or {})
+                        if isinstance(first, dict):
+                            term = _compact_ols_term(first, ontology_hint=best_onto or ontology or None)
+                    except ToolExecutionError:
+                        term = {
+                            "obo_id": best.get("obo_id"),
+                            "label": best.get("label"),
+                            "iri": best.get("iri"),
+                            "ontology": best_onto or None,
+                            "synonyms": [str(item) for item in _as_list(best.get("synonym")) if str(item).strip()],
+                            "xrefs": [str(item) for item in _as_list(best.get("database_cross_reference")) if str(item).strip()],
+                        }
+
+        if term is None:
+            raise ToolExecutionError(
+                code="NOT_FOUND",
+                message="No ontology term found for provided identifier.",
+                details={"iri": iri or None, "obo_id": obo_id or None, "ontology": ontology or None, "tried_paths": tried_paths},
+            )
+
         return make_tool_output(
             source="ols",
-            summary="Fetched ontology term by OBO ID." if exact else "No matching ontology term found.",
-            data={"term": exact},
-            ids=[exact.get("obo_id")] if isinstance(exact, dict) and exact.get("obo_id") else [],
-            warnings=[f"No exact match for '{obo_id}'"] if not exact else [],
+            summary="Fetched ontology term.",
+            data={"term": term, "tried_paths": tried_paths},
+            ids=[term.get("obo_id")] if term.get("obo_id") else [],
+            warnings=warnings,
+            request_id=_request_id(request_headers),
             ctx=ctx,
         )
 
