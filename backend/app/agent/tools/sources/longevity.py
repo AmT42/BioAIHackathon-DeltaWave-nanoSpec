@@ -87,6 +87,25 @@ def _looks_like_waf_block(html: str) -> bool:
     return "captcha" in html_lower or "cloudfront" in html_lower
 
 
+def _looks_like_waf_error(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in ["http 403", "http 405", "forbidden", "captcha", "cloudfront", "waf"])
+
+
+def _coerce_bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
 def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
     def hagr_drugage_refresh(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
         dataset = str(payload.get("dataset", "drugage")).strip().lower()
@@ -170,7 +189,7 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
 
         species_filter = str(payload.get("species", "")).strip().lower() or None
         limit = min(max(int(payload.get("limit", 25)), 1), 200)
-        auto_refresh = bool(payload.get("auto_refresh", True))
+        auto_refresh = _coerce_bool(payload.get("auto_refresh"), default=True)
 
         if ctx is None:
             raise ToolExecutionError(code="VALIDATION_ERROR", message="Tool context is required for source cache routing")
@@ -261,8 +280,9 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             "NIA host appears blocked by anti-bot controls. "
             f"Using JAX fallback URL ({fallback_url}) if needed."
         )
+        unavailable_hint = f"Primary NIA source was unavailable. Using JAX fallback URL ({fallback_url}) if needed."
         attempted_errors: list[dict[str, str]] = []
-        blocked_hosts: list[str] = []
+        primary_nia_issue: dict[str, Any] | None = None
         html: str | None = None
         resolved_url: str | None = None
         resolved_host: str | None = None
@@ -281,26 +301,35 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
                     }
                 )
                 if _is_nia_host(attempt_host):
-                    blocked_hosts.append(attempt_host)
+                    primary_nia_blocked = _looks_like_waf_error(exc.message)
+                    primary_nia_issue = {
+                        "source_host": attempt_host,
+                        "blocked_by_waf": primary_nia_blocked,
+                    }
                     if has_next_attempt:
                         continue
                     raise ToolExecutionError(
                         code="UPSTREAM_ERROR",
-                        message=blocked_hint,
+                        message=blocked_hint if primary_nia_blocked else unavailable_hint,
                         details={
                             "source_host": attempt_host,
-                            "blocked_by_waf": True,
+                            "blocked_by_waf": primary_nia_blocked,
                             "attempted_urls": attempt_urls,
                             "attempt_errors": attempted_errors,
                         },
                     ) from exc
-                if blocked_hosts:
+                if primary_nia_issue is not None:
+                    primary_nia_blocked = bool(primary_nia_issue.get("blocked_by_waf"))
                     raise ToolExecutionError(
                         code="UPSTREAM_ERROR",
-                        message="Primary NIA source appears blocked and fallback retrieval failed.",
+                        message=(
+                            "Primary NIA source appears blocked and fallback retrieval failed."
+                            if primary_nia_blocked
+                            else "Primary NIA source was unavailable and fallback retrieval failed."
+                        ),
                         details={
                             "source_host": attempt_host,
-                            "blocked_by_waf": True,
+                            "blocked_by_waf": primary_nia_blocked,
                             "attempted_urls": attempt_urls,
                             "attempt_errors": attempted_errors,
                         },
@@ -308,7 +337,10 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
                 raise
 
             if _is_nia_host(attempt_host) and _looks_like_waf_block(candidate_html):
-                blocked_hosts.append(attempt_host)
+                primary_nia_issue = {
+                    "source_host": attempt_host,
+                    "blocked_by_waf": True,
+                }
                 attempted_errors.append(
                     {
                         "url": attempt_url,
@@ -357,6 +389,8 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
 
         p_values = re.findall(r"p\s*[=<>]\s*([0-9]*\.?[0-9]+)", text, flags=re.IGNORECASE)
         fallback_used = resolved_url != url
+        blocked_by_waf = bool(primary_nia_issue and primary_nia_issue.get("blocked_by_waf"))
+        fallback_warning = blocked_hint if blocked_by_waf else unavailable_hint
 
         return make_tool_output(
             source="itp",
@@ -369,14 +403,14 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
                 "url": resolved_url,
                 "requested_url": url,
                 "source_host": resolved_host,
-                "blocked_by_waf": bool(blocked_hosts),
+                "blocked_by_waf": blocked_by_waf,
                 "fallback_used": fallback_used,
                 "fallback_url": fallback_url if _is_nia_host(requested_host) else None,
                 "text_preview": preview,
                 "p_values": p_values[:20],
             },
             ids=[resolved_url],
-            warnings=[blocked_hint] if fallback_used else [],
+            warnings=[fallback_warning] if fallback_used else [],
             artifacts=artifacts,
             ctx=ctx,
         )

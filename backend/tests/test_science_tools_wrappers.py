@@ -178,6 +178,23 @@ def test_hagr_refresh_falls_back_to_stale_cache(tmp_path: Path) -> None:
     assert out["warnings"]
 
 
+def test_hagr_query_honors_string_false_auto_refresh(tmp_path: Path) -> None:
+    class NoRefreshHttp:
+        def get_bytes(self, *, url, params=None, headers=None):
+            raise AssertionError("refresh must not be called when auto_refresh=false")
+
+    cache_root = tmp_path / "cache" / "sources"
+    cache_root.mkdir(parents=True, exist_ok=True)
+
+    ctx = ToolContext(thread_id="t", run_id="r", tool_use_id="u", source_cache_root=cache_root)
+    tools = build_longevity_tools(NoRefreshHttp())
+
+    with pytest.raises(ToolExecutionError) as exc:
+        _tool(tools, "hagr_drugage_query").handler({"compound": "rapamycin", "auto_refresh": "false"}, ctx)
+
+    assert exc.value.code == "NOT_FOUND"
+
+
 def test_itp_summary_uses_jax_fallback_when_nia_is_blocked() -> None:
     class ITPHttp:
         def __init__(self) -> None:
@@ -199,6 +216,24 @@ def test_itp_summary_uses_jax_fallback_when_nia_is_blocked() -> None:
     assert out["data"]["source_host"] == "phenome.jax.org"
     assert out["data"]["url"] == "https://phenome.jax.org/itp/surv/MetRapa/C2011"
     assert out["warnings"]
+
+
+def test_itp_summary_marks_non_waf_unavailable_when_fallback_succeeds() -> None:
+    class ITPHttp:
+        def get_text(self, *, url, params=None, headers=None):
+            if "nia.nih.gov" in url:
+                raise ToolExecutionError(code="UPSTREAM_ERROR", message="Network error while contacting upstream source")
+            if "phenome.jax.org" in url:
+                return ("<html><body>Median lifespan improved</body></html>", {})
+            raise AssertionError(f"Unhandled url: {url}")
+
+    tools = build_longevity_tools(ITPHttp())
+    out = _tool(tools, "itp_fetch_survival_summary").handler({"url": "https://www.nia.nih.gov/itp/example"}, None)
+
+    assert out["data"]["fallback_used"] is True
+    assert out["data"]["blocked_by_waf"] is False
+    assert out["data"]["source_host"] == "phenome.jax.org"
+    assert "unavailable" in out["warnings"][0].lower()
 
 
 def test_itp_summary_uses_requested_url_when_not_blocked() -> None:
