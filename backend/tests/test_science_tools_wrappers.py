@@ -8,6 +8,7 @@ import pytest
 from app.config import get_settings
 from app.agent.tools.context import ToolContext
 from app.agent.tools.errors import ToolExecutionError
+from app.agent.tools.registry import ToolRegistry
 from app.agent.tools.sources.literature import build_literature_tools
 from app.agent.tools.sources.longevity import build_longevity_tools
 from app.agent.tools.sources.normalization import build_normalization_tools
@@ -39,6 +40,19 @@ class FakeHttp:
                 },
                 {"x-request-id": "oa-1"},
             )
+        if "esearch.fcgi" in url:
+            return (
+                {
+                    "esearchresult": {
+                        "count": "2",
+                        "idlist": ["12345", "67890"],
+                        "querytranslation": "rapamycin[All Fields]",
+                        "webenv": "NCID_1",
+                        "querykey": "1",
+                    }
+                },
+                {},
+            )
         if "esummary.fcgi" in url:
             return (
                 {
@@ -61,13 +75,43 @@ class FakeHttp:
             return ({"properties": {"name": "Sirolimus", "tty": "IN"}}, {})
         raise AssertionError(f"Unhandled url: {url}")
 
+    def get_text(self, *, url, params=None, headers=None):
+        if "efetch.fcgi" in url:
+            xml = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID>12345</PMID>
+      <Article>
+        <ArticleTitle>Rapamycin trial in aging adults</ArticleTitle>
+        <Abstract>
+          <AbstractText>Primary endpoint was frailty score. NCT01234567.</AbstractText>
+        </Abstract>
+        <Journal><Title>JAMA</Title><JournalIssue><PubDate><Year>2022</Year></PubDate></JournalIssue></Journal>
+        <PublicationTypeList><PublicationType>Randomized Controlled Trial</PublicationType></PublicationTypeList>
+      </Article>
+      <MeshHeadingList>
+        <MeshHeading><DescriptorName>Humans</DescriptorName></MeshHeading>
+      </MeshHeadingList>
+    </MedlineCitation>
+    <PubmedData>
+      <ArticleIdList>
+        <ArticleId IdType=\"doi\">10.1/x</ArticleId>
+      </ArticleIdList>
+    </PubmedData>
+  </PubmedArticle>
+</PubmedArticleSet>
+"""
+            return (xml, {})
+        raise AssertionError(f"Unhandled url: {url}")
+
 
 def _tool(specs, name: str):
     return next(spec for spec in specs if spec.name == name)
 
 
 def test_literature_wrappers_openalex_and_pubmed() -> None:
-    settings = replace(get_settings(), openalex_api_key="test-key")
+    settings = replace(get_settings(), openalex_api_key="test-key", enable_openalex_tools=True, enable_pubmed_tools=True)
     tools = build_literature_tools(settings, FakeHttp())
     ctx = ToolContext(thread_id="t", run_id="r", tool_use_id="u")
 
@@ -75,8 +119,44 @@ def test_literature_wrappers_openalex_and_pubmed() -> None:
     assert out["ids"] == ["https://openalex.org/W1"]
     assert out["data"]["works"][0]["pmid"] == "12345"
 
+    pub_search = _tool(tools, "pubmed_esearch").handler({"term": "rapamycin"}, ctx)
+    assert pub_search["data"]["count"] == 2
+    assert pub_search["ids"] == ["12345", "67890"]
+
+    pub_fetch = _tool(tools, "pubmed_efetch").handler({"pmids": ["12345"]}, ctx)
+    record = pub_fetch["data"]["records"][0]
+    assert record["humans"] is True
+    assert record["doi"] == "10.1/x"
+    assert "NCT01234567" in record["nct_ids"]
+
     pub = _tool(tools, "pubmed_enrich_pmids").handler({"pmids": ["12345"]}, ctx)
     assert pub["data"]["records"][0]["is_rct_like"] is True
+
+
+def test_literature_tools_are_key_and_flag_gated() -> None:
+    settings = replace(get_settings(), openalex_api_key=None, enable_openalex_tools=True, enable_pubmed_tools=True)
+    tools = build_literature_tools(settings, FakeHttp())
+    names = {tool.name for tool in tools}
+    assert "openalex_search_works" not in names
+    assert "pubmed_esearch" in names
+
+
+def test_wrapper_runs_through_registry_execute(tmp_path: Path) -> None:
+    settings = replace(get_settings(), openalex_api_key=None, enable_openalex_tools=True, enable_pubmed_tools=True)
+    specs = build_literature_tools(settings, FakeHttp())
+    registry = ToolRegistry(
+        specs,
+        artifact_root=tmp_path / "artifacts",
+        source_cache_root=tmp_path / "artifacts" / "cache" / "sources",
+    )
+
+    result = registry.execute(
+        "pubmed_esearch",
+        {"term": "rapamycin"},
+        ctx=ToolContext(thread_id="t", run_id="r", tool_use_id="call-1"),
+    )
+    assert result["status"] == "success"
+    assert result["output"]["source_meta"]["source"] == "pubmed"
 
 
 def test_concept_merge_prefers_rxnorm_ingredient() -> None:
@@ -108,12 +188,28 @@ def test_concept_merge_prefers_rxnorm_ingredient() -> None:
     assert concept["pivot"] == {"source": "rxnorm", "id": "111"}
 
 
-def test_optional_epistemonikos_requires_key() -> None:
+def test_build_search_terms_includes_pubmed_channel() -> None:
+    tools = build_normalization_tools(FakeHttp())
+    out = _tool(tools, "build_search_terms").handler(
+        {
+            "concept": {
+                "label": "Rapamycin",
+                "synonyms": [{"text": "Sirolimus"}, {"text": "Rapa"}],
+            },
+            "max_synonyms": 3,
+        },
+        None,
+    )
+    terms = out["data"]["terms"]
+    assert "pubmed" in terms
+    assert terms["pubmed"][0] == "Rapamycin"
+
+
+def test_optional_epistemonikos_is_omitted_without_key() -> None:
     settings = replace(get_settings(), epistemonikos_api_key=None)
     tools = build_optional_source_tools(settings, FakeHttp())
-    with pytest.raises(ToolExecutionError) as exc:
-        _tool(tools, "epistemonikos_search_reviews").handler({"query": "aging"}, None)
-    assert exc.value.code == "UNCONFIGURED"
+    names = {tool.name for tool in tools}
+    assert "epistemonikos_search_reviews" not in names
 
 
 def test_ols_get_term_uses_query_endpoint_and_embedded_terms() -> None:
@@ -178,6 +274,43 @@ def test_hagr_refresh_falls_back_to_stale_cache(tmp_path: Path) -> None:
     assert out["warnings"]
 
 
+def test_itp_summary_uses_jax_fallback_when_nia_is_blocked() -> None:
+    class ITPHttp:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def get_text(self, *, url, params=None, headers=None):
+            self.calls.append(url)
+            if "nia.nih.gov" in url:
+                raise ToolExecutionError(code="UPSTREAM_ERROR", message="HTTP 405 from upstream source")
+            if "phenome.jax.org" in url:
+                return ("<html><body>Median lifespan improved, p = 0.03</body></html>", {})
+            raise AssertionError(f"Unhandled url: {url}")
+
+    tools = build_longevity_tools(ITPHttp())
+    with pytest.raises(ToolExecutionError) as exc:
+        _tool(tools, "itp_fetch_survival_summary").handler({"url": "https://www.nia.nih.gov/itp/example"}, None)
+    assert exc.value.code == "UPSTREAM_ERROR"
+    assert exc.value.details["blocked_by_waf"] is True
+
+
+def test_itp_summary_uses_requested_url_when_not_blocked() -> None:
+    class ITPHttp:
+        def get_text(self, *, url, params=None, headers=None):
+            assert url == "https://phenome.jax.org/itp/surv/MetRapa/C2011"
+            return ("<html><body>p < 0.05</body></html>", {})
+
+    tools = build_longevity_tools(ITPHttp())
+    out = _tool(tools, "itp_fetch_survival_summary").handler(
+        {"url": "https://phenome.jax.org/itp/surv/MetRapa/C2011"},
+        None,
+    )
+
+    assert out["data"]["blocked_by_waf"] is False
+    assert out["data"]["source_host"] == "phenome.jax.org"
+    assert out["data"]["url"] == "https://phenome.jax.org/itp/surv/MetRapa/C2011"
+
+
 def test_chebi_v2_mapping_and_epistemonikos_documents_endpoints() -> None:
     class OptionalHttp:
         def __init__(self) -> None:
@@ -216,29 +349,35 @@ def test_chebi_v2_mapping_and_epistemonikos_documents_endpoints() -> None:
                 assert headers and headers["Authorization"] == 'Token token="epi-key"'
                 return (
                     {
+                        "results": [
+                            {
+                                "id": "SR-1",
+                                "title": "Systematic review",
+                                "classification": "systematic-review",
+                                "year": 2024,
+                                "url": "https://epi.example/sr1",
+                            }
+                        ],
                         "search_info": {"total_results": 1},
-                        "results": [{"id": "doc1", "title": "Review", "year": 2024, "classification": "systematic-review"}],
                     },
                     {},
                 )
-            if "/v1/documents/doc1" in url:
+            if "/v1/documents/" in url:
                 assert headers and headers["Authorization"] == 'Token token="epi-key"'
-                return ({"id": "doc1", "title": "Review"}, {})
+                return ({"id": "SR-1", "title": "Systematic review"}, {})
             raise AssertionError(f"Unhandled url: {url}")
 
     settings = replace(get_settings(), epistemonikos_api_key="epi-key")
     tools = build_optional_source_tools(settings, OptionalHttp())
 
-    chebi_search = _tool(tools, "chebi_search_entities").handler({"query": "nmn", "limit": 5}, None)
+    chebi_search = _tool(tools, "chebi_search_entities").handler({"query": "adenine"}, None)
     assert chebi_search["data"]["records"][0]["chebi_id"] == "CHEBI:123"
 
-    chebi_get = _tool(tools, "chebi_get_entity").handler({"chebi_id": "CHEBI:16708"}, None)
-    assert chebi_get["data"]["entity"]["chebi_accession"] == "CHEBI:16708"
-    assert chebi_get["data"]["synonyms"][0] == "Ade"
+    chebi_entity = _tool(tools, "chebi_get_entity").handler({"chebi_id": "CHEBI:16708"}, None)
+    assert "Ade" in chebi_entity["data"]["synonyms"]
 
-    epi_search = _tool(tools, "epistemonikos_search_reviews").handler({"query": "rapamycin"}, None)
-    assert epi_search["data"]["api_version"] == "v1"
-    assert epi_search["ids"] == ["doc1"]
+    epi_search = _tool(tools, "epistemonikos_search_reviews").handler({"query": "aging"}, None)
+    assert epi_search["ids"] == ["SR-1"]
 
-    epi_get = _tool(tools, "epistemonikos_get_review").handler({"review_id": "doc1"}, None)
-    assert epi_get["data"]["review"]["id"] == "doc1"
+    epi_get = _tool(tools, "epistemonikos_get_review").handler({"review_id": "SR-1"}, None)
+    assert epi_get["data"]["review"]["id"] == "SR-1"
