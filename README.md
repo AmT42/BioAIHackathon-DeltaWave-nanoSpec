@@ -1,17 +1,15 @@
 # Hackathon Agent Core
 
-Minimal, fresh repo for a chatbot that supports:
-- Claude interleaved thinking + tool use
-- Gemini thinking + tool use
-- WebSocket token streaming
-- Canonical event persistence for stable replay ordering
-
-This project intentionally excludes workflow engines, memory systems, and heavy app-specific logic.
+Minimal Gemini-first chat stack with:
+- interleaved thinking + tool calls
+- streaming over WebSocket
+- canonical DB event persistence
+- mono-eve-style per-run logs under `backend/logs/<run_index>`
 
 ## Structure
 
-- `backend/` FastAPI + SQLAlchemy async
-- `frontend/` Next.js chat UI with deterministic event reducer
+- `backend/`: FastAPI + SQLAlchemy async
+- `frontend/`: Next.js chat UI with separated worklog vs final answer
 
 ## Backend Quick Start
 
@@ -20,7 +18,18 @@ cd backend
 cp .env.example .env
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .[dev]
+pip install -e '.[dev]'
+```
+
+Run with log capture (recommended):
+
+```bash
+./scripts/eve-up.sh
+```
+
+Or run directly:
+
+```bash
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -32,35 +41,54 @@ npm install
 NEXT_PUBLIC_BACKEND_URL=http://localhost:8000 npm run dev
 ```
 
-Open `http://localhost:3000`.
+If port `3000` is already in use:
+
+```bash
+NEXT_PUBLIC_BACKEND_URL=http://localhost:8000 npm run dev -- -p 3001
+```
+
+Open `http://localhost:3000` (or `3001` if changed).
 
 ## API
 
 ### REST
+
 - `POST /api/threads`
+- `GET /api/threads/{thread_id}/messages`
 - `GET /api/threads/{thread_id}/events`
 - `POST /api/chat/send`
 
 ### WebSocket
-- `WS /ws/chat?thread_id=<id>&provider=claude|gemini`
-- send messages with payload:
+
+- `WS /ws/chat?thread_id=<id>&provider=gemini`
+- send:
 
 ```json
-{ "type": "user_message", "content": "your question" }
+{ "type": "main_agent_chat", "content": "your question" }
 ```
 
 ## Stream Event Contract
 
-- `chat_start`
-- `segment_start` / `segment_token` / `segment_end`
-- `thinking_start` / `thinking_token` / `thinking_end`
-- `tool_start` / `tool_result`
-- `chat_complete`
-- `chat_error`
+- `main_agent_start`
+- `main_agent_thinking_start` / `main_agent_thinking_token` / `main_agent_thinking_end` / `main_agent_thinking_title`
+- `main_agent_segment_start` / `main_agent_segment_token` / `main_agent_segment_end`
+- `main_agent_tool_start` / `main_agent_tool_result`
+- `main_agent_complete`
+- `main_agent_error`
 
-Each event carries `thread_id`, `run_id`, and `segment_index` when applicable.
+## Log Layout
+
+Each `./backend/scripts/eve-up.sh` run creates:
+
+- `backend/logs/<run_index>/run_metadata.json`
+- `backend/logs/<run_index>/backend.log`
+- `backend/logs/<run_index>/threads/<thread_id>/db_thread.json`
+- `backend/logs/<run_index>/threads/<thread_id>/user_msg_<N>/request_<M>/request_payload.json`
+- `backend/logs/<run_index>/threads/<thread_id>/user_msg_<N>/request_<M>/answer.json`
+- `backend/logs/<run_index>/threads/<thread_id>/user_msg_<N>/request_<M>/answer.txt`
+- `backend/logs/<run_index>/threads/<thread_id>/user_msg_<N>/request_<M>/tools/normal_tool/*.json`
 
 ## Notes
 
-- If API keys are missing, set `MOCK_LLM=true` to demo full UI + tool flow deterministically.
-- SQLite is used by default for minimal local setup.
+- `MOCK_LLM=false` requires `GEMINI_API_KEY`.
+- If Gemini model naming fails (404 model not found), switch `GEMINI_MODEL` to a supported model for your key/project (for example `gemini/gemini-3-pro` or `gemini/gemini-3-flash`).
