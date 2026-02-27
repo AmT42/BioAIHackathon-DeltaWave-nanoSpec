@@ -16,6 +16,35 @@ from app.agent.tools.sources.optional_sources import build_optional_source_tools
 
 class FakeHttp:
     def get_json(self, *, url, params=None, headers=None):
+        if "esearch.fcgi" in url:
+            return (
+                {
+                    "esearchresult": {
+                        "idlist": ["12345", "67890"],
+                        "count": "2",
+                        "webenv": "WENV",
+                        "querykey": "1",
+                        "querytranslation": "rapamycin[Title/Abstract]",
+                    }
+                },
+                {"x-request-id": "pm-search"},
+            )
+        if "esummary.fcgi" in url:
+            return (
+                {
+                    "result": {
+                        "uids": ["12345"],
+                        "12345": {
+                            "title": "Trial paper",
+                            "pubdate": "2022",
+                            "source": "JAMA",
+                            "pubtype": ["Randomized Controlled Trial"],
+                            "articleids": [{"idtype": "doi", "value": "10.1/x"}],
+                        },
+                    }
+                },
+                {"x-request-id": "pm-fetch"},
+            )
         if "api.openalex.org/works" in url and "/works/" not in url:
             return (
                 {
@@ -37,23 +66,7 @@ class FakeHttp:
                     ],
                     "meta": {"count": 1, "page": 1, "per_page": 25},
                 },
-                {"x-request-id": "oa-1"},
-            )
-        if "esummary.fcgi" in url:
-            return (
-                {
-                    "result": {
-                        "uids": ["12345"],
-                        "12345": {
-                            "title": "Trial paper",
-                            "pubdate": "2022",
-                            "source": "JAMA",
-                            "pubtype": ["Randomized Controlled Trial"],
-                            "articleids": [{"idtype": "doi", "value": "10.1/x"}],
-                        },
-                    }
-                },
-                {},
+                {"x-request-id": "oa-search"},
             )
         if "rxcui.json" in url:
             return ({"idGroup": {"rxnormId": ["111"]}}, {})
@@ -61,42 +74,66 @@ class FakeHttp:
             return ({"properties": {"name": "Sirolimus", "tty": "IN"}}, {})
         raise AssertionError(f"Unhandled url: {url}")
 
+    def get_text(self, *, url, params=None, headers=None):
+        if "efetch.fcgi" in url:
+            return (
+                """
+                <PubmedArticleSet>
+                  <PubmedArticle>
+                    <MedlineCitation>
+                      <PMID>12345</PMID>
+                      <Article><Abstract><AbstractText>Abstract A</AbstractText></Abstract></Article>
+                    </MedlineCitation>
+                  </PubmedArticle>
+                </PubmedArticleSet>
+                """,
+                {},
+            )
+        raise AssertionError(f"Unhandled text url: {url}")
+
 
 def _tool(specs, name: str):
     return next(spec for spec in specs if spec.name == name)
 
 
-def test_literature_wrappers_openalex_and_pubmed() -> None:
+def test_literature_wrappers_pubmed_and_openalex() -> None:
     settings = replace(get_settings(), openalex_api_key="test-key")
     tools = build_literature_tools(settings, FakeHttp())
     ctx = ToolContext(thread_id="t", run_id="r", tool_use_id="u")
 
-    out = _tool(tools, "openalex_search_works").handler({"query": "rapamycin"}, ctx)
-    assert out["ids"] == ["https://openalex.org/W1"]
-    assert out["data"]["works"][0]["pmid"] == "12345"
+    out = _tool(tools, "pubmed_search").handler({"query": "rapamycin aging", "mode": "precision", "limit": 5}, ctx)
+    assert out["ids"] == ["12345", "67890"]
 
-    pub = _tool(tools, "pubmed_enrich_pmids").handler({"pmids": ["12345"]}, ctx)
-    assert pub["data"]["records"][0]["is_rct_like"] is True
+    fetch = _tool(tools, "pubmed_fetch").handler({"ids": ["12345"], "mode": "balanced", "include_abstract": True}, ctx)
+    assert fetch["data"]["records"][0]["is_rct_like"] is True
+    assert fetch["data"]["records"][0]["abstract"] == "Abstract A"
+
+    oa = _tool(tools, "openalex_search").handler({"query": "rapamycin", "mode": "balanced"}, ctx)
+    assert oa["ids"] == ["https://openalex.org/W1"]
 
 
 def test_concept_merge_prefers_rxnorm_ingredient() -> None:
     tools = build_normalization_tools(FakeHttp())
     ctx = ToolContext(thread_id="t", run_id="r", tool_use_id="u")
 
-    merged = _tool(tools, "concept_merge_candidates").handler(
+    merged = _tool(tools, "normalize_merge_candidates").handler(
         {
             "user_text": "rapamycin",
-            "rxnorm": {
+            "drug_candidates": {
                 "data": {
                     "ingredient_rxcui": "111",
                     "candidates": [{"rxcui": "111", "name": "Sirolimus", "tty": "IN"}],
                 }
             },
-            "pubchem": {
+            "compound_candidates": {
                 "data": {
-                    "cid": "5284616",
-                    "inchikey": "AAA",
-                    "preferred_name": "Rapamycin",
+                    "records": [
+                        {
+                            "cid": "5284616",
+                            "inchikey": "AAA",
+                            "preferred_name": "Rapamycin",
+                        }
+                    ]
                 }
             },
         },
@@ -112,29 +149,29 @@ def test_optional_epistemonikos_requires_key() -> None:
     settings = replace(get_settings(), epistemonikos_api_key=None)
     tools = build_optional_source_tools(settings, FakeHttp())
     with pytest.raises(ToolExecutionError) as exc:
-        _tool(tools, "epistemonikos_search_reviews").handler({"query": "aging"}, None)
+        _tool(tools, "epistemonikos_search").handler({"query": "aging", "mode": "balanced"}, None)
     assert exc.value.code == "UNCONFIGURED"
 
 
-def test_ols_get_term_uses_query_endpoint_and_embedded_terms() -> None:
+def test_normalize_ontology_fetch_uses_query_endpoint() -> None:
     class OlsHttp:
         def __init__(self) -> None:
             self.calls: list[tuple[str, dict | None]] = []
 
         def get_json(self, *, url, params=None, headers=None):
             self.calls.append((url, params))
-            if "ols4/api/ontologies/efo/terms" in url:
+            if "ols4/api/search" in url:
                 return (
                     {
-                        "_embedded": {
-                            "terms": [
+                        "response": {
+                            "docs": [
                                 {
                                     "obo_id": "EFO:0000721",
                                     "label": "time",
                                     "iri": "http://www.ebi.ac.uk/efo/EFO_0000721",
                                     "ontology_name": "efo",
-                                    "synonyms": ["duration"],
-                                    "annotation": {"database_cross_reference": ["MESH:D013995"]},
+                                    "synonym": ["duration"],
+                                    "database_cross_reference": ["MESH:D013995"],
                                 }
                             ]
                         }
@@ -145,14 +182,14 @@ def test_ols_get_term_uses_query_endpoint_and_embedded_terms() -> None:
 
     http = OlsHttp()
     tools = build_normalization_tools(http)
-    out = _tool(tools, "ols_get_term").handler(
-        {"iri": "http://www.ebi.ac.uk/efo/EFO_0000721", "ontology": "efo"},
+    out = _tool(tools, "normalize_ontology_fetch").handler(
+        {"ids": ["EFO:0000721"], "ontology": "efo", "mode": "precision"},
         None,
     )
 
     assert http.calls
-    assert http.calls[0][0].endswith("/ols4/api/ontologies/efo/terms")
-    assert out["data"]["term"]["obo_id"] == "EFO:0000721"
+    assert http.calls[0][0].endswith("/ols4/api/search")
+    assert out["data"]["records"][0]["obo_id"] == "EFO:0000721"
 
 
 def test_hagr_refresh_falls_back_to_stale_cache(tmp_path: Path) -> None:
@@ -171,14 +208,52 @@ def test_hagr_refresh_falls_back_to_stale_cache(tmp_path: Path) -> None:
 
     ctx = ToolContext(thread_id="t", run_id="r", tool_use_id="u", source_cache_root=cache_root)
     tools = build_longevity_tools(FailingHttp())
-    out = _tool(tools, "hagr_drugage_refresh").handler({"dataset": "drugage"}, ctx)
+    out = _tool(tools, "longevity_drugage_refresh").handler({"mode": "balanced"}, ctx)
 
     assert out["data"]["stale_cache"] is True
     assert "stale" in out["summary"].lower()
     assert out["warnings"]
 
 
-def test_chebi_v2_mapping_and_epistemonikos_documents_endpoints() -> None:
+def test_itp_summary_uses_jax_fallback_when_nia_is_blocked() -> None:
+    class ITPHttp:
+        def get_text(self, *, url, params=None, headers=None):
+            if "nia.nih.gov" in url:
+                raise ToolExecutionError(code="UPSTREAM_ERROR", message="HTTP 405 from upstream source")
+            if "phenome.jax.org" in url:
+                return ("<html><body>Median lifespan improved, p = 0.03</body></html>", {})
+            raise AssertionError(f"Unhandled url: {url}")
+
+    tools = build_longevity_tools(ITPHttp())
+    out = _tool(tools, "longevity_itp_fetch_summary").handler(
+        {"ids": ["https://www.nia.nih.gov/itp/example"], "mode": "precision"},
+        None,
+    )
+
+    assert out["data"]["records"][0]["fallback_used"] is True
+    assert out["data"]["records"][0]["blocked_by_waf"] is True
+    assert out["data"]["records"][0]["source_host"] == "phenome.jax.org"
+    assert out["warnings"]
+
+
+def test_itp_summary_uses_requested_url_when_not_blocked() -> None:
+    class ITPHttp:
+        def get_text(self, *, url, params=None, headers=None):
+            assert url == "https://phenome.jax.org/itp/surv/MetRapa/C2011"
+            return ("<html><body>p < 0.05</body></html>", {})
+
+    tools = build_longevity_tools(ITPHttp())
+    out = _tool(tools, "longevity_itp_fetch_summary").handler(
+        {"ids": ["https://phenome.jax.org/itp/surv/MetRapa/C2011"], "mode": "precision"},
+        None,
+    )
+
+    assert out["data"]["records"][0]["fallback_used"] is False
+    assert out["data"]["records"][0]["blocked_by_waf"] is False
+    assert out["warnings"] == []
+
+
+def test_chebi_and_epistemonikos_endpoints() -> None:
     class OptionalHttp:
         def __init__(self) -> None:
             self.calls: list[tuple[str, dict | None, dict | None]] = []
@@ -229,16 +304,15 @@ def test_chebi_v2_mapping_and_epistemonikos_documents_endpoints() -> None:
     settings = replace(get_settings(), epistemonikos_api_key="epi-key")
     tools = build_optional_source_tools(settings, OptionalHttp())
 
-    chebi_search = _tool(tools, "chebi_search_entities").handler({"query": "nmn", "limit": 5}, None)
+    chebi_search = _tool(tools, "chebi_search").handler({"query": "nmn", "mode": "balanced", "limit": 5}, None)
     assert chebi_search["data"]["records"][0]["chebi_id"] == "CHEBI:123"
 
-    chebi_get = _tool(tools, "chebi_get_entity").handler({"chebi_id": "CHEBI:16708"}, None)
-    assert chebi_get["data"]["entity"]["chebi_accession"] == "CHEBI:16708"
-    assert chebi_get["data"]["synonyms"][0] == "Ade"
+    chebi_fetch = _tool(tools, "chebi_fetch").handler({"ids": ["CHEBI:16708"], "mode": "balanced"}, None)
+    assert chebi_fetch["data"]["records"][0]["entity"]["chebi_accession"] == "CHEBI:16708"
+    assert chebi_fetch["data"]["records"][0]["synonyms"][0] == "Ade"
 
-    epi_search = _tool(tools, "epistemonikos_search_reviews").handler({"query": "rapamycin"}, None)
-    assert epi_search["data"]["api_version"] == "v1"
+    epi_search = _tool(tools, "epistemonikos_search").handler({"query": "rapamycin", "mode": "balanced"}, None)
     assert epi_search["ids"] == ["doc1"]
 
-    epi_get = _tool(tools, "epistemonikos_get_review").handler({"review_id": "doc1"}, None)
-    assert epi_get["data"]["review"]["id"] == "doc1"
+    epi_fetch = _tool(tools, "epistemonikos_fetch").handler({"ids": ["doc1"], "mode": "balanced"}, None)
+    assert epi_fetch["data"]["records"][0]["id"] == "doc1"

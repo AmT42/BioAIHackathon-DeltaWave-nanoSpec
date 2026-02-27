@@ -6,9 +6,79 @@ from urllib import parse
 from app.config import Settings
 from app.agent.tools.context import ToolContext
 from app.agent.tools.contracts import make_tool_output
+from app.agent.tools.descriptions import render_tool_description
 from app.agent.tools.errors import ToolExecutionError
 from app.agent.tools.http_client import SimpleHttpClient
 from app.agent.tools.registry import ToolSpec
+
+
+MODES = {"precision", "balanced", "recall"}
+
+
+def _require_mode(payload: dict[str, Any]) -> str:
+    mode = str(payload.get("mode", "balanced")).strip().lower()
+    if mode not in MODES:
+        raise ToolExecutionError(
+            code="VALIDATION_ERROR",
+            message="'mode' must be one of: precision, balanced, recall",
+            details={"allowed": sorted(MODES)},
+        )
+    return mode
+
+
+def _require_query(payload: dict[str, Any], key: str = "query") -> str:
+    value = str(payload.get(key, "")).strip()
+    if not value:
+        raise ToolExecutionError(code="VALIDATION_ERROR", message=f"'{key}' is required")
+    return value
+
+
+def _limit_for_mode(payload: dict[str, Any], *, default_precision: int, default_balanced: int, default_recall: int, maximum: int) -> int:
+    mode = _require_mode(payload)
+    default = {
+        "precision": default_precision,
+        "balanced": default_balanced,
+        "recall": default_recall,
+    }[mode]
+    raw = payload.get("limit", default)
+    try:
+        value = int(raw)
+    except Exception as exc:
+        raise ToolExecutionError(code="VALIDATION_ERROR", message="'limit' must be an integer") from exc
+    if value < 1 or value > maximum:
+        raise ToolExecutionError(
+            code="VALIDATION_ERROR",
+            message=f"'limit' must be between 1 and {maximum}",
+            details={"limit": value, "max": maximum},
+        )
+    return value
+
+
+def _require_ids(payload: dict[str, Any], *, max_size: int = 50) -> list[str]:
+    ids = payload.get("ids")
+    if not isinstance(ids, list) or not ids:
+        raise ToolExecutionError(code="VALIDATION_ERROR", message="'ids' must be a non-empty list")
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in ids:
+        value = str(item or "").strip()
+        if not value:
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+
+    if not out:
+        raise ToolExecutionError(code="VALIDATION_ERROR", message="No valid IDs provided in 'ids'")
+    if len(out) > max_size:
+        raise ToolExecutionError(
+            code="VALIDATION_ERROR",
+            message=f"Too many IDs. Maximum is {max_size}",
+            details={"provided": len(out), "max": max_size},
+        )
+    return out
 
 
 def _require_epistemonikos_key(settings: Settings) -> str:
@@ -26,11 +96,10 @@ def _epistemonikos_auth_headers(api_key: str) -> dict[str, str]:
 
 
 def build_optional_source_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSpec]:
-    def chembl_search_molecules(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
-        query = str(payload.get("query", "")).strip()
-        if not query:
-            raise ToolExecutionError(code="VALIDATION_ERROR", message="'query' is required")
-        limit = min(max(int(payload.get("limit", 20)), 1), 100)
+    def chembl_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        query = _require_query(payload)
+        mode = _require_mode(payload)
+        limit = _limit_for_mode(payload, default_precision=10, default_balanced=20, default_recall=50, maximum=100)
 
         data, _ = http.get_json(
             url="https://www.ebi.ac.uk/chembl/api/data/molecule/search.json",
@@ -49,30 +118,45 @@ def build_optional_source_tools(settings: Settings, http: SimpleHttpClient) -> l
         return make_tool_output(
             source="chembl",
             summary=f"Found {len(records)} ChEMBL molecule candidate(s).",
-            data={"records": records},
+            result_kind="record_list",
+            data={"query": query, "mode": mode, "records": records},
             ids=[record.get("chembl_id") for record in records if record.get("chembl_id")],
+            next_recommended_tools=["chembl_fetch"],
             ctx=ctx,
         )
 
-    def chembl_get_molecule(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
-        chembl_id = str(payload.get("chembl_id", "")).strip()
-        if not chembl_id:
-            raise ToolExecutionError(code="VALIDATION_ERROR", message="'chembl_id' is required")
-        data, _ = http.get_json(url=f"https://www.ebi.ac.uk/chembl/api/data/molecule/{parse.quote(chembl_id)}.json")
+    def chembl_fetch(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        ids = _require_ids(payload, max_size=30)
+        mode = _require_mode(payload)
+
+        records: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        for chembl_id in ids:
+            try:
+                data, _ = http.get_json(url=f"https://www.ebi.ac.uk/chembl/api/data/molecule/{parse.quote(chembl_id)}.json")
+                records.append(data)
+            except ToolExecutionError as exc:
+                warnings.append(f"{chembl_id}: {exc.message}")
+
         return make_tool_output(
             source="chembl",
-            summary=f"Fetched ChEMBL molecule {chembl_id}.",
-            data={"molecule": data},
-            ids=[chembl_id],
+            summary=f"Fetched {len(records)} ChEMBL molecule record(s).",
+            result_kind="record_list",
+            data={"mode": mode, "records": records},
+            ids=[str((rec or {}).get("molecule_chembl_id")) for rec in records if (rec or {}).get("molecule_chembl_id")],
+            warnings=warnings,
             ctx=ctx,
         )
 
-    def chebi_search_entities(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
-        query = str(payload.get("query", "")).strip()
-        if not query:
-            raise ToolExecutionError(code="VALIDATION_ERROR", message="'query' is required")
-        limit = min(max(int(payload.get("limit", 20)), 1), 100)
-        page = max(int(payload.get("page", 1)), 1)
+    def chebi_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        query = _require_query(payload)
+        mode = _require_mode(payload)
+        limit = _limit_for_mode(payload, default_precision=10, default_balanced=20, default_recall=50, maximum=100)
+        page_token = str(payload.get("page_token", "")).strip() or "1"
+        try:
+            page = max(int(page_token), 1)
+        except Exception as exc:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'page_token' must be an integer page string") from exc
 
         data, _ = http.get_json(
             url="https://www.ebi.ac.uk/chebi/backend/api/public/es_search/",
@@ -90,48 +174,54 @@ def build_optional_source_tools(settings: Settings, http: SimpleHttpClient) -> l
             }
             for item in items
         ]
+        has_more = len(records) >= limit
         return make_tool_output(
             source="chebi",
             summary=f"Found {len(records)} ChEBI candidate(s).",
-            data={"query": query, "page": page, "records": records},
+            result_kind="record_list",
+            data={"query": query, "mode": mode, "page": page, "records": records},
             ids=[record.get("chebi_id") for record in records if record.get("chebi_id")],
+            pagination={"next_page_token": str(page + 1) if has_more else None, "has_more": has_more},
+            next_recommended_tools=["chebi_fetch"],
             ctx=ctx,
         )
 
-    def chebi_get_entity(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
-        chebi_id = str(payload.get("chebi_id", "")).strip()
-        if not chebi_id:
-            raise ToolExecutionError(code="VALIDATION_ERROR", message="'chebi_id' is required")
+    def chebi_fetch(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        ids = _require_ids(payload, max_size=30)
+        mode = _require_mode(payload)
 
-        normalized = chebi_id
-        if normalized.upper().startswith("CHEBI:"):
-            normalized = f"CHEBI:{normalized.split(':', 1)[1]}"
-        data, _ = http.get_json(
-            url=f"https://www.ebi.ac.uk/chebi/backend/api/public/compound/{parse.quote(normalized)}/"
-        )
-        names = data.get("names") if isinstance(data, dict) else {}
-        synonym_nodes = names.get("SYNONYM") if isinstance(names, dict) else []
-        synonyms = [str(item.get("name")) for item in (synonym_nodes or []) if isinstance(item, dict) and item.get("name")]
+        records: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        for chebi_id in ids:
+            normalized = chebi_id
+            if normalized.upper().startswith("CHEBI:"):
+                normalized = f"CHEBI:{normalized.split(':', 1)[1]}"
+            try:
+                data, _ = http.get_json(
+                    url=f"https://www.ebi.ac.uk/chebi/backend/api/public/compound/{parse.quote(normalized)}/"
+                )
+                names = data.get("names") if isinstance(data, dict) else {}
+                synonym_nodes = names.get("SYNONYM") if isinstance(names, dict) else []
+                synonyms = [str(item.get("name")) for item in (synonym_nodes or []) if isinstance(item, dict) and item.get("name")]
+                records.append({"entity": data, "synonyms": synonyms[:50]})
+            except ToolExecutionError as exc:
+                warnings.append(f"{chebi_id}: {exc.message}")
+
         return make_tool_output(
             source="chebi",
-            summary=f"Fetched ChEBI entity {chebi_id}.",
-            data={"entity": data, "synonyms": synonyms[:50]},
-            ids=[str(data.get("chebi_accession") or chebi_id)],
+            summary=f"Fetched {len(records)} ChEBI entity record(s).",
+            result_kind="record_list",
+            data={"mode": mode, "records": records},
+            ids=[str((item.get("entity") or {}).get("chebi_accession")) for item in records if (item.get("entity") or {}).get("chebi_accession")],
+            warnings=warnings,
             ctx=ctx,
         )
 
-    def semanticscholar_search_papers(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
-        query = str(payload.get("query", "")).strip()
-        if not query:
-            raise ToolExecutionError(code="VALIDATION_ERROR", message="'query' is required")
-
-        limit = min(max(int(payload.get("limit", 20)), 1), 100)
-        fields = str(
-            payload.get(
-                "fields",
-                "title,year,paperId,externalIds,citationCount",
-            )
-        ).strip()
+    def semanticscholar_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        query = _require_query(payload)
+        mode = _require_mode(payload)
+        limit = _limit_for_mode(payload, default_precision=10, default_balanced=20, default_recall=50, maximum=100)
+        fields = str(payload.get("fields", "title,year,paperId,externalIds,citationCount")).strip()
         headers = {}
         if settings.semanticscholar_api_key:
             headers["x-api-key"] = settings.semanticscholar_api_key
@@ -156,7 +246,8 @@ def build_optional_source_tools(settings: Settings, http: SimpleHttpClient) -> l
         return make_tool_output(
             source="semanticscholar",
             summary=f"Found {len(records)} Semantic Scholar paper(s).",
-            data={"records": records},
+            result_kind="record_list",
+            data={"query": query, "mode": mode, "records": records},
             ids=[record.get("paper_id") for record in records if record.get("paper_id")],
             citations=[
                 {
@@ -167,14 +258,13 @@ def build_optional_source_tools(settings: Settings, http: SimpleHttpClient) -> l
                 }
                 for record in records
             ],
+            next_recommended_tools=["semanticscholar_fetch"],
             ctx=ctx,
         )
 
-    def semanticscholar_get_papers(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
-        paper_ids = payload.get("paper_ids") or []
-        if not isinstance(paper_ids, list) or not paper_ids:
-            raise ToolExecutionError(code="VALIDATION_ERROR", message="'paper_ids' must be a non-empty list")
-
+    def semanticscholar_fetch(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        ids = _require_ids(payload, max_size=50)
+        mode = _require_mode(payload)
         fields = str(payload.get("fields", "title,year,externalIds,citationCount,abstract")).strip()
         headers = {}
         if settings.semanticscholar_api_key:
@@ -182,10 +272,7 @@ def build_optional_source_tools(settings: Settings, http: SimpleHttpClient) -> l
 
         records: list[dict[str, Any]] = []
         warnings: list[str] = []
-        for item in paper_ids:
-            paper_id = str(item).strip()
-            if not paper_id:
-                continue
+        for paper_id in ids:
             try:
                 data, _ = http.get_json(
                     url=f"https://api.semanticscholar.org/graph/v1/paper/{parse.quote(paper_id, safe='')}",
@@ -199,20 +286,24 @@ def build_optional_source_tools(settings: Settings, http: SimpleHttpClient) -> l
         return make_tool_output(
             source="semanticscholar",
             summary=f"Fetched {len(records)} Semantic Scholar paper record(s).",
-            data={"records": records},
+            result_kind="record_list",
+            data={"mode": mode, "records": records},
             ids=[record.get("paperId") for record in records if isinstance(record, dict)],
             warnings=warnings,
             ctx=ctx,
         )
 
-    def epistemonikos_search_reviews(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+    def epistemonikos_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
         key = _require_epistemonikos_key(settings)
-        query = str(payload.get("query", "")).strip()
-        if not query:
-            raise ToolExecutionError(code="VALIDATION_ERROR", message="'query' is required")
+        query = _require_query(payload)
+        mode = _require_mode(payload)
+        limit = _limit_for_mode(payload, default_precision=10, default_balanced=20, default_recall=50, maximum=100)
+        page_token = str(payload.get("page_token", "")).strip() or "1"
+        try:
+            page = max(int(page_token), 1)
+        except Exception as exc:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'page_token' must be an integer page string") from exc
 
-        limit = min(max(int(payload.get("limit", 20)), 1), 100)
-        page = max(int(payload.get("page", 1)), 1)
         data, _ = http.get_json(
             url="https://api.epistemonikos.org/v1/documents/search",
             params={
@@ -234,146 +325,231 @@ def build_optional_source_tools(settings: Settings, http: SimpleHttpClient) -> l
             for item in records[:limit]
             if isinstance(item, dict)
         ]
+
+        has_more = len(compact) >= limit
         return make_tool_output(
             source="epistemonikos",
             summary=f"Found {len(compact)} Epistemonikos review candidate(s).",
+            result_kind="record_list",
             data={
+                "query": query,
+                "mode": mode,
                 "api_version": "v1",
-                "auth_mode": 'Authorization: Token token="<API_KEY>"',
-                "search_info": (data or {}).get("search_info") or {},
                 "records": compact,
+                "search_info": (data or {}).get("search_info") or {},
             },
             ids=[str(item.get("id")) for item in compact if item.get("id")],
+            auth_required=True,
+            auth_configured=bool(settings.epistemonikos_api_key),
+            pagination={"next_page_token": str(page + 1) if has_more else None, "has_more": has_more},
+            next_recommended_tools=["epistemonikos_fetch"],
             ctx=ctx,
         )
 
-    def epistemonikos_get_review(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+    def epistemonikos_fetch(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
         key = _require_epistemonikos_key(settings)
-        review_id = str(payload.get("review_id", "")).strip()
-        if not review_id:
-            raise ToolExecutionError(code="VALIDATION_ERROR", message="'review_id' is required")
+        ids = _require_ids(payload, max_size=30)
+        mode = _require_mode(payload)
 
-        data, _ = http.get_json(
-            url=f"https://api.epistemonikos.org/v1/documents/{parse.quote(review_id)}",
-            headers=_epistemonikos_auth_headers(key),
-        )
+        records: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        for review_id in ids:
+            try:
+                data, _ = http.get_json(
+                    url=f"https://api.epistemonikos.org/v1/documents/{parse.quote(review_id)}",
+                    headers=_epistemonikos_auth_headers(key),
+                )
+                records.append(data)
+            except ToolExecutionError as exc:
+                warnings.append(f"{review_id}: {exc.message}")
+
         return make_tool_output(
             source="epistemonikos",
-            summary=f"Fetched Epistemonikos review {review_id}.",
-            data={
-                "api_version": "v1",
-                "auth_mode": 'Authorization: Token token="<API_KEY>"',
-                "review": data,
-            },
-            ids=[review_id],
+            summary=f"Fetched {len(records)} Epistemonikos review record(s).",
+            result_kind="record_list",
+            data={"mode": mode, "records": records},
+            ids=[str((record or {}).get("id")) for record in records if (record or {}).get("id")],
+            warnings=warnings,
+            auth_required=True,
+            auth_configured=bool(settings.epistemonikos_api_key),
             ctx=ctx,
         )
 
     return [
         ToolSpec(
-            name="chembl_search_molecules",
-            description="Search ChEMBL molecules by free-text query.",
+            name="chembl_search",
+            description=render_tool_description(
+                purpose="Search ChEMBL molecules for mechanism and target-oriented enrichment.",
+                when=["you need optional mechanistic context", "compound requires target-level follow-up"],
+                avoid=["core evidence retrieval phase", "query unrelated to molecules"],
+                critical_args=["query: molecule text", "mode/limit: breadth controls"],
+                returns="Record list of candidate ChEMBL molecules.",
+                fails_if=["query missing", "invalid mode", "invalid limit"],
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
+                    "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
                 },
                 "required": ["query"],
             },
-            handler=chembl_search_molecules,
+            handler=chembl_search,
             source="chembl",
         ),
         ToolSpec(
-            name="chembl_get_molecule",
-            description="Fetch one ChEMBL molecule by ChEMBL ID.",
+            name="chembl_fetch",
+            description=render_tool_description(
+                purpose="Fetch ChEMBL molecule records by known ChEMBL IDs.",
+                when=["you already have ChEMBL IDs", "you need full molecule metadata"],
+                avoid=["no IDs available", "batch too large"],
+                critical_args=["ids: ChEMBL IDs", "mode: policy consistency"],
+                returns="Record list of ChEMBL molecule payloads.",
+                fails_if=["ids missing", "too many IDs"],
+            ),
             input_schema={
                 "type": "object",
-                "properties": {"chembl_id": {"type": "string"}},
-                "required": ["chembl_id"],
+                "properties": {
+                    "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 30},
+                    "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
+                },
+                "required": ["ids"],
             },
-            handler=chembl_get_molecule,
+            handler=chembl_fetch,
             source="chembl",
         ),
         ToolSpec(
-            name="chebi_search_entities",
-            description="Search ChEBI entities by free-text query.",
+            name="chebi_search",
+            description=render_tool_description(
+                purpose="Search ChEBI entities for optional ontology-level chemical enrichment.",
+                when=["you need ChEBI ontology mapping", "compound ontology disambiguation"],
+                avoid=["core retrieval phase", "non-chemical queries"],
+                critical_args=["query: entity text", "mode/limit/page_token: search depth controls"],
+                returns="Record list of ChEBI candidates with accession IDs.",
+                fails_if=["query missing", "invalid mode", "invalid limit/page token"],
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
-                    "page": {"type": "integer", "minimum": 1, "default": 1},
+                    "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                    "page_token": {"type": "string"},
                 },
                 "required": ["query"],
             },
-            handler=chebi_search_entities,
+            handler=chebi_search,
             source="chebi",
         ),
         ToolSpec(
-            name="chebi_get_entity",
-            description="Fetch one ChEBI entity by ChEBI ID.",
+            name="chebi_fetch",
+            description=render_tool_description(
+                purpose="Fetch ChEBI entity records by accession IDs.",
+                when=["you already have ChEBI IDs", "you need synonyms and metadata"],
+                avoid=["no IDs available", "using this for core evidence retrieval"],
+                critical_args=["ids: ChEBI accession IDs", "mode: policy consistency"],
+                returns="Record list with ChEBI entity payload and synonyms.",
+                fails_if=["ids missing", "too many IDs"],
+            ),
             input_schema={
                 "type": "object",
-                "properties": {"chebi_id": {"type": "string"}},
-                "required": ["chebi_id"],
+                "properties": {
+                    "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 30},
+                    "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
+                },
+                "required": ["ids"],
             },
-            handler=chebi_get_entity,
+            handler=chebi_fetch,
             source="chebi",
         ),
         ToolSpec(
-            name="semanticscholar_search_papers",
-            description="Search Semantic Scholar papers.",
+            name="semanticscholar_search",
+            description=render_tool_description(
+                purpose="Search Semantic Scholar for optional citation expansion.",
+                when=["you need citation-driven expansion", "identifying influential related papers"],
+                avoid=["primary biomedical typing phase", "querying without clear concept terms"],
+                critical_args=["query: paper search text", "mode/limit: breadth", "fields: response fields"],
+                returns="Record list of paper candidates with external IDs.",
+                fails_if=["query missing", "invalid mode", "invalid limit"],
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
+                    "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
                     "fields": {"type": "string"},
                 },
                 "required": ["query"],
             },
-            handler=semanticscholar_search_papers,
+            handler=semanticscholar_search,
             source="semanticscholar",
         ),
         ToolSpec(
-            name="semanticscholar_get_papers",
-            description="Fetch Semantic Scholar paper details by paper IDs.",
+            name="semanticscholar_fetch",
+            description=render_tool_description(
+                purpose="Fetch Semantic Scholar paper records by paper IDs.",
+                when=["you already have Semantic Scholar IDs", "you need full abstract/citation payload"],
+                avoid=["no IDs available", "batch exceeds limits"],
+                critical_args=["ids: paper IDs", "mode: policy consistency", "fields: optional output tuning"],
+                returns="Record list of Semantic Scholar paper payloads.",
+                fails_if=["ids missing", "too many IDs"],
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
-                    "paper_ids": {"type": "array", "items": {"type": "string"}},
+                    "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 50},
+                    "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
                     "fields": {"type": "string"},
                 },
-                "required": ["paper_ids"],
+                "required": ["ids"],
             },
-            handler=semanticscholar_get_papers,
+            handler=semanticscholar_fetch,
             source="semanticscholar",
         ),
         ToolSpec(
-            name="epistemonikos_search_reviews",
-            description="Search Epistemonikos systematic reviews (requires API key).",
+            name="epistemonikos_search",
+            description=render_tool_description(
+                purpose="Search Epistemonikos systematic reviews (key-gated optional source).",
+                when=["API key is configured", "you need review-layer enrichment"],
+                avoid=["EPISTEMONIKOS_API_KEY missing", "using this as mandatory core path"],
+                critical_args=["query: review search text", "mode/limit/page_token: retrieval controls"],
+                returns="Record list of review candidates with Epistemonikos IDs.",
+                fails_if=["query missing", "API key missing", "invalid mode or pagination"],
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
-                    "page": {"type": "integer", "minimum": 1, "default": 1},
+                    "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                    "page_token": {"type": "string"},
                 },
                 "required": ["query"],
             },
-            handler=epistemonikos_search_reviews,
+            handler=epistemonikos_search,
             source="epistemonikos",
         ),
         ToolSpec(
-            name="epistemonikos_get_review",
-            description="Fetch one Epistemonikos review by review ID (requires API key).",
+            name="epistemonikos_fetch",
+            description=render_tool_description(
+                purpose="Fetch Epistemonikos review records by review IDs (key-gated).",
+                when=["API key is configured", "you already have review IDs"],
+                avoid=["EPISTEMONIKOS_API_KEY missing", "no IDs provided"],
+                critical_args=["ids: review IDs", "mode: policy consistency"],
+                returns="Record list of Epistemonikos review payloads.",
+                fails_if=["ids missing", "API key missing", "too many IDs"],
+            ),
             input_schema={
                 "type": "object",
-                "properties": {"review_id": {"type": "string"}},
-                "required": ["review_id"],
+                "properties": {
+                    "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 30},
+                    "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
+                },
+                "required": ["ids"],
             },
-            handler=epistemonikos_get_review,
+            handler=epistemonikos_fetch,
             source="epistemonikos",
         ),
     ]

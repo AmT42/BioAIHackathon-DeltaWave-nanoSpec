@@ -8,13 +8,15 @@ from app.agent.tools.science_registry import create_science_registry
 from app.config import get_settings
 
 
-def _settings(tmp_path: Path):
+def _settings(tmp_path: Path, *, openalex_key: str | None = None, epi_key: str | None = None):
     return replace(
         get_settings(),
         mock_llm=True,
-        openalex_api_key="test-key",
+        openalex_api_key=openalex_key,
+        epistemonikos_api_key=epi_key,
         artifacts_root=tmp_path / "artifacts",
         source_cache_root=tmp_path / "artifacts" / "cache" / "sources",
+        enable_builtin_demo_tools=False,
     )
 
 
@@ -22,13 +24,26 @@ def test_science_registry_contains_core_tools(tmp_path: Path) -> None:
     registry = create_science_registry(_settings(tmp_path))
     names = {schema["function"]["name"] for schema in registry.openai_schemas()}
 
-    assert "openalex_search_works" in names
-    assert "clinicaltrials_search_studies" in names
-    assert "rxnorm_resolve" in names
-    assert "concept_merge_candidates" in names
+    assert "pubmed_search" in names
+    assert "clinicaltrials_search" in names
+    assert "normalize_drug" in names
+    assert "normalize_merge_candidates" in names
+    assert "web_search_mock" not in names
 
 
-def test_tool_output_contract_and_error_shape(tmp_path: Path) -> None:
+def test_registry_gates_openalex_and_epistemonikos_by_key(tmp_path: Path) -> None:
+    no_keys = create_science_registry(_settings(tmp_path, openalex_key=None, epi_key=None))
+    no_key_names = {schema["function"]["name"] for schema in no_keys.openai_schemas()}
+    assert "openalex_search" not in no_key_names
+    assert "epistemonikos_search" not in no_key_names
+
+    with_keys = create_science_registry(_settings(tmp_path, openalex_key="oa-key", epi_key="epi-key"))
+    with_key_names = {schema["function"]["name"] for schema in with_keys.openai_schemas()}
+    assert "openalex_search" in with_key_names
+    assert "epistemonikos_search" in with_key_names
+
+
+def test_tool_output_contract_v2_shape(tmp_path: Path) -> None:
     registry = create_science_registry(_settings(tmp_path))
     ctx = ToolContext(
         thread_id="thread-1",
@@ -38,11 +53,13 @@ def test_tool_output_contract_and_error_shape(tmp_path: Path) -> None:
         tool_use_id="call-1",
     )
 
-    ok = registry.execute("calc", {"expression": "3*7"}, ctx=ctx)
+    ok = registry.execute("normalize_merge_candidates", {"user_text": "rapamycin"}, ctx=ctx)
     assert ok["status"] == "success"
 
     output = ok["output"]
     for key in [
+        "contract_version",
+        "result_kind",
         "summary",
         "data",
         "ids",
@@ -51,8 +68,19 @@ def test_tool_output_contract_and_error_shape(tmp_path: Path) -> None:
         "artifacts",
         "pagination",
         "source_meta",
+        "guidance",
     ]:
         assert key in output
+
+    assert output["contract_version"] == "2.0"
+    assert output["result_kind"] in {"id_list", "record_list", "document", "aggregate", "status"}
+
+    assert "auth" in output["source_meta"]
+    assert isinstance(output["source_meta"]["auth"].get("required"), bool)
+    assert isinstance(output["source_meta"]["auth"].get("configured"), bool)
+
+    assert "next_recommended_tools" in output["guidance"]
+    assert isinstance(output["guidance"]["next_recommended_tools"], list)
 
     err = registry.execute("missing_tool", {}, ctx=ctx)
     assert err["status"] == "error"

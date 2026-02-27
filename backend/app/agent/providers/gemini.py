@@ -247,8 +247,14 @@ class GeminiProvider(ProviderClient):
         lowered = user_text.lower()
         tool_calls: list[ToolCall] = []
         if "search" in lowered:
-            tool_calls.append(ToolCall(id="mock_gemini_search_1", name="web_search_mock", input={"query": user_text}))
-            text = "I will run a quick search first."
+            tool_calls.append(
+                ToolCall(
+                    id="mock_gemini_search_1",
+                    name="pubmed_search",
+                    input={"query": user_text, "mode": "precision", "limit": 5},
+                )
+            )
+            text = "I will run a quick literature search first."
         else:
             text = f"Gemini mock response: {user_text or 'Ready.'}"
 

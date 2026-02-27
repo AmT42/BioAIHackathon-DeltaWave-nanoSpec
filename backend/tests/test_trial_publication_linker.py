@@ -25,7 +25,8 @@ def test_trial_publication_linker_flags_completed_without_publications() -> None
 
     output = _tool(tools, "trial_publication_linker").handler(
         {
-            "nct_ids": ["NCT01234567"],
+            "ids": ["NCT01234567"],
+            "mode": "balanced",
             "trials": [
                 {
                     "nct_id": "NCT01234567",
