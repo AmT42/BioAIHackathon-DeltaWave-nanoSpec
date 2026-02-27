@@ -276,6 +276,42 @@ def test_gemini_provider_parses_first_json_object_from_concatenated_arguments(
     assert result.tool_calls[0].input == {"expression": "2+2"}
 
 
+def test_gemini_provider_generates_unique_fallback_tool_call_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_kwargs: dict[str, Any] = {}
+    chunks = [
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "function_call": {
+                                    "name": "calc",
+                                    "args": {"expression": "2+2"},
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+    _install_fake_google_genai(monkeypatch, chunks=chunks, captured_kwargs=captured_kwargs)
+
+    provider = GeminiProvider(api_key="test-key", model="gemini/gemini-3.1-flash", mock_mode=False)
+    result = provider.stream_turn(
+        messages=[{"role": "user", "content": "compute"}],
+        tools=[],
+        system_prompt="",
+        on_thinking_token=lambda _token: None,
+        on_text_token=lambda _token: None,
+    )
+
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].id.startswith("gemini_tool_")
+    assert result.tool_calls[0].id != "gemini_tool_1"
+
+
 def test_gemini_provider_falls_back_from_3_1_model_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     captured_kwargs: dict[str, Any] = {}
     chunks = [

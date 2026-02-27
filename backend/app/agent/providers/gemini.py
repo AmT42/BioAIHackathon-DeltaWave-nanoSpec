@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import uuid
 from typing import Any, Callable
 
 from app.agent.providers.base import ProviderClient
@@ -554,6 +555,7 @@ class GeminiProvider(ProviderClient):
         consumed_text = ""
         consumed_thinking = ""
         fallback_tool_idx = 0
+        fallback_nonce = uuid.uuid4().hex[:10]
 
         def merge_tool_call(call: dict[str, Any]) -> None:
             nonlocal fallback_tool_idx
@@ -564,7 +566,7 @@ class GeminiProvider(ProviderClient):
 
             if call_id is None:
                 fallback_tool_idx += 1
-                key = f"gemini_tool_{fallback_tool_idx}"
+                key = f"gemini_tool_{fallback_nonce}_{fallback_tool_idx}"
             else:
                 key = str(call_id)
 
