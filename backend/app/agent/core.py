@@ -57,6 +57,9 @@ class AgentCore:
             "gemini": GeminiProvider(
                 api_key=settings.gemini_api_key,
                 model=settings.gemini_model,
+                reasoning_effort=settings.gemini_reasoning_effort,
+                include_thoughts=settings.gemini_include_thoughts,
+                thinking_budget=settings.gemini_thinking_budget,
                 mock_mode=settings.mock_llm,
             ),
         }
@@ -116,17 +119,13 @@ class AgentCore:
                 "model": self.settings.gemini_model,
                 "messages": provider_messages,
                 "stream": True,
+                "reasoning_effort": self.settings.gemini_reasoning_effort,
+                "thinking_config": {
+                    "include_thoughts": self.settings.gemini_include_thoughts,
+                    "thinking_budget": self.settings.gemini_thinking_budget,
+                },
                 "tools": tool_schemas,
                 "tool_choice": "auto" if tool_schemas else None,
-                "extra_body": {
-                    "extra_body": {
-                        "google": {
-                            "thinking_config": {
-                                "include_thoughts": True,
-                            }
-                        }
-                    }
-                },
             }
             if request_payload.get("tool_choice") is None:
                 request_payload.pop("tool_choice", None)
