@@ -47,6 +47,7 @@ class Settings:
     enable_safety_tools: bool
     enable_longevity_tools: bool
     enable_optional_source_tools: bool
+    enable_builtin_demo_tools: bool
 
 
 def _normalize_reasoning_effort(value: str | None) -> str:
@@ -108,4 +109,5 @@ def get_settings() -> Settings:
         enable_safety_tools=_env_bool("ENABLE_SAFETY_TOOLS", default=True),
         enable_longevity_tools=_env_bool("ENABLE_LONGEVITY_TOOLS", default=True),
         enable_optional_source_tools=_env_bool("ENABLE_OPTIONAL_SOURCE_TOOLS", default=True),
+        enable_builtin_demo_tools=_env_bool("ENABLE_BUILTIN_DEMO_TOOLS", default=False),
     )
