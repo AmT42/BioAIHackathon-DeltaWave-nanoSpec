@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Literal
@@ -9,7 +10,7 @@ from typing import Any, Awaitable, Callable, Literal
 from app.agent.adapters import build_gemini_openai_messages
 from app.agent.providers import GeminiProvider
 from app.agent.prompt import DEFAULT_SYSTEM_PROMPT
-from app.agent.tools.context import ToolContext
+from app.agent.repl import ReplRuntime, ReplSessionManager
 from app.agent.tools.registry import ToolRegistry
 from app.agent.types import ToolCall
 from app.config import Settings
@@ -30,6 +31,75 @@ from app.trace_normalizer import build_trace_v1
 
 ProviderName = Literal["gemini"]
 Emitter = Callable[[dict[str, Any]], Awaitable[None]]
+
+_REPL_TOOL_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "repl_exec",
+        "description": (
+            "Run Python code in the persistent coding REPL for this thread. "
+            "Use this only for Python logic and calling science tool wrappers. "
+            "Do not run shell commands here; use 'bash_exec' for shell commands. "
+            "Only printed output is visible back to the model."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "Python code to execute in the thread-scoped REPL session.",
+                }
+            },
+            "required": ["code"],
+        },
+    },
+}
+
+_BASH_TOOL_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "bash_exec",
+        "description": (
+            "Run a guarded bash command in the workspace. "
+            "Use this for shell commands (ls, rg, cat, git, etc), not inside repl_exec."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "Shell command to execute.",
+                },
+                "timeout_s": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 120,
+                    "default": 30,
+                    "description": "Command timeout in seconds.",
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Optional working directory relative to workspace root.",
+                },
+            },
+            "required": ["command"],
+        },
+    },
+}
+
+_REPL_SESSION_MANAGER: ReplSessionManager | None = None
+_REPL_SESSION_MANAGER_LOCK = threading.Lock()
+
+
+def _get_repl_session_manager(settings: Settings) -> ReplSessionManager:
+    global _REPL_SESSION_MANAGER
+    with _REPL_SESSION_MANAGER_LOCK:
+        if _REPL_SESSION_MANAGER is None:
+            _REPL_SESSION_MANAGER = ReplSessionManager(
+                max_sessions=settings.repl_max_sessions,
+                session_ttl_seconds=settings.repl_session_ttl_seconds,
+            )
+        return _REPL_SESSION_MANAGER
 
 
 def _utc_iso() -> str:
@@ -54,6 +124,18 @@ class AgentCore:
         self.settings = settings
         self.store = store
         self.tools = tools
+        if settings.agent_execution_mode != "repl_only":
+            raise ValueError("Only 'repl_only' execution mode is supported in this build")
+        self.repl_runtime = ReplRuntime(
+            tools=tools,
+            workspace_root=settings.repl_workspace_root,
+            allowed_command_prefixes=settings.repl_allowed_command_prefixes,
+            blocked_command_prefixes=settings.repl_blocked_command_prefixes,
+            max_stdout_bytes=settings.repl_max_stdout_bytes,
+            max_wall_time_seconds=settings.repl_max_wall_time_seconds,
+            max_tool_calls_per_exec=settings.repl_max_tool_calls_per_exec,
+            session_manager=_get_repl_session_manager(settings),
+        )
         self._providers = {
             "gemini": GeminiProvider(
                 api_key=settings.gemini_api_key,
@@ -116,7 +198,7 @@ class AgentCore:
 
             canonical_events = await self.store.get_canonical_events(thread_id)
             provider_messages = build_gemini_openai_messages(canonical_events, system_prompt=DEFAULT_SYSTEM_PROMPT)
-            tool_schemas = self.tools.openai_schemas()
+            tool_schemas = [_REPL_TOOL_SCHEMA, _BASH_TOOL_SCHEMA]
 
             request_payload: dict[str, Any] = {
                 "model": self.settings.gemini_model,
@@ -497,19 +579,279 @@ class AgentCore:
                 )
 
                 started_at = _utc_iso()
-                tool_result = self.tools.execute(
-                    tc.name,
-                    tc.input,
-                    ctx=ToolContext(
-                        thread_id=thread_id,
-                        run_id=run_id,
-                        request_index=request_index,
-                        user_msg_index=user_msg_index,
-                        tool_use_id=tc.id,
-                        tool_name=tc.name,
-                    ),
-                )
+                nested_events: list[dict[str, Any]] = []
+                if tc.name == "repl_exec":
+                    code = str(tc.input.get("code") or "").strip()
+                    if not code:
+                        tool_result = {
+                            "status": "error",
+                            "error": {
+                                "code": "VALIDATION_ERROR",
+                                "message": "repl_exec requires non-empty 'code'",
+                                "retryable": False,
+                                "details": {},
+                            },
+                        }
+                    else:
+                        await emit(
+                            {
+                                "type": "main_agent_repl_start",
+                                "thread_id": thread_id,
+                                "run_id": run_id,
+                                "segment_index": tool_segment,
+                                "tool_use_id": tc.id,
+                                "tool_name": tc.name,
+                                "code": code,
+                            }
+                        )
+
+                        def _on_nested_start(call_id: str, tool_name: str, payload: dict[str, Any]) -> None:
+                            nested_events.append(
+                                {
+                                    "kind": "start",
+                                    "call_id": call_id,
+                                    "tool_name": tool_name,
+                                    "payload": payload,
+                                    "started_at": _utc_iso(),
+                                }
+                            )
+
+                        def _on_nested_result(call_id: str, tool_name: str, result_payload: dict[str, Any]) -> None:
+                            nested_events.append(
+                                {
+                                    "kind": "result",
+                                    "call_id": call_id,
+                                    "tool_name": tool_name,
+                                    "result": result_payload,
+                                    "finished_at": _utc_iso(),
+                                }
+                            )
+
+                        try:
+                            repl_result = self.repl_runtime.execute(
+                                thread_id=thread_id,
+                                run_id=run_id,
+                                request_index=request_index,
+                                user_msg_index=user_msg_index,
+                                execution_id=tc.id,
+                                code=code,
+                                on_tool_start=_on_nested_start,
+                                on_tool_result=_on_nested_result,
+                            )
+                            tool_result = repl_result.to_tool_output()
+
+                            if repl_result.stdout:
+                                await emit(
+                                    {
+                                        "type": "main_agent_repl_stdout",
+                                        "thread_id": thread_id,
+                                        "run_id": run_id,
+                                        "segment_index": tool_segment,
+                                        "tool_use_id": tc.id,
+                                        "content": repl_result.stdout,
+                                    }
+                                )
+                            if repl_result.stderr:
+                                await emit(
+                                    {
+                                        "type": "main_agent_repl_stderr",
+                                        "thread_id": thread_id,
+                                        "run_id": run_id,
+                                        "segment_index": tool_segment,
+                                        "tool_use_id": tc.id,
+                                        "content": repl_result.stderr,
+                                    }
+                                )
+                        except Exception as exc:  # pragma: no cover - defensive guard
+                            tool_result = {
+                                "status": "error",
+                                "error": {
+                                    "code": "REPL_RUNTIME_ERROR",
+                                    "message": f"{type(exc).__name__}: {exc}",
+                                    "retryable": True,
+                                    "details": {},
+                                },
+                            }
+                        await emit(
+                            {
+                                "type": "main_agent_repl_end",
+                                "thread_id": thread_id,
+                                "run_id": run_id,
+                                "segment_index": tool_segment,
+                                "tool_use_id": tc.id,
+                                "result": tool_result,
+                            }
+                        )
+                elif tc.name == "bash_exec":
+                    command = str(tc.input.get("command") or "").strip()
+                    if not command:
+                        tool_result = {
+                            "status": "error",
+                            "error": {
+                                "code": "VALIDATION_ERROR",
+                                "message": "bash_exec requires non-empty 'command'",
+                                "retryable": False,
+                                "details": {},
+                            },
+                        }
+                    else:
+                        timeout_raw = tc.input.get("timeout_s", 30)
+                        try:
+                            timeout_s = int(timeout_raw)
+                        except Exception:
+                            timeout_s = 30
+                        cwd_raw = tc.input.get("cwd")
+                        cwd = str(cwd_raw).strip() if isinstance(cwd_raw, str) and str(cwd_raw).strip() else None
+                        try:
+                            shell_result = self.repl_runtime.execute_bash(command=command, timeout_s=timeout_s, cwd=cwd)
+                            summary = "Bash command completed successfully."
+                            if shell_result.returncode != 0:
+                                summary = f"Bash command exited with code {shell_result.returncode}."
+                            tool_result = {
+                                "status": "success",
+                                "output": {
+                                    "summary": summary,
+                                    "command": shell_result.command,
+                                    "returncode": shell_result.returncode,
+                                    "stdout": shell_result.stdout,
+                                    "stderr": shell_result.stderr,
+                                    "truncated": shell_result.truncated,
+                                },
+                            }
+                        except Exception as exc:
+                            message = f"{type(exc).__name__}: {exc}"
+                            code = "SHELL_RUNTIME_ERROR"
+                            retryable = True
+                            if isinstance(exc, ValueError) and "Blocked command prefix" in str(exc):
+                                code = "SHELL_POLICY_ERROR"
+                                retryable = False
+                                message = (
+                                    f"{type(exc).__name__}: {exc}. "
+                                    "Use science wrappers (e.g., pubmed_search/pubmed_fetch) "
+                                    "instead of curl/wget for retrieval."
+                                )
+                            tool_result = {
+                                "status": "error",
+                                "error": {
+                                    "code": code,
+                                    "message": message,
+                                    "retryable": retryable,
+                                    "details": {
+                                        "command": command,
+                                        "cwd": cwd,
+                                    },
+                                },
+                            }
+                else:
+                    tool_result = {
+                        "status": "error",
+                        "error": {
+                            "code": "UNSUPPORTED_TOOL",
+                            "message": f"Unsupported tool '{tc.name}'. Supported tools: repl_exec, bash_exec.",
+                            "retryable": False,
+                            "details": {"tool_name": tc.name},
+                        },
+                    }
                 finished_at = _utc_iso()
+
+                nested_segment_by_call_id: dict[str, int] = {}
+                nested_started_at: dict[str, str] = {}
+                nested_payload_by_call_id: dict[str, dict[str, Any]] = {}
+                for nested in nested_events:
+                    kind = str(nested.get("kind") or "")
+                    nested_call_id = str(nested.get("call_id") or "")
+                    nested_tool_name = str(nested.get("tool_name") or "tool")
+                    if not nested_call_id:
+                        continue
+                    if kind == "start":
+                        nested_segment = _next_segment()
+                        nested_segment_by_call_id[nested_call_id] = nested_segment
+                        nested_payload = nested.get("payload") if isinstance(nested.get("payload"), dict) else {}
+                        await emit(
+                            {
+                                "type": "main_agent_tool_start",
+                                "thread_id": thread_id,
+                                "run_id": run_id,
+                                "segment_index": nested_segment,
+                                "tool_use_id": nested_call_id,
+                                "tool_name": nested_tool_name,
+                                "arguments": nested_payload,
+                                "parent_tool_use_id": tc.id,
+                            }
+                        )
+                        await self.store.record_tool_call(
+                            thread_id=thread_id,
+                            tool_call_id=nested_call_id,
+                            tool_name=nested_tool_name,
+                            input_payload=nested_payload,
+                            visible_to_model=False,
+                        )
+                        nested_started_at[nested_call_id] = str(nested.get("started_at") or _utc_iso())
+                        nested_payload_by_call_id[nested_call_id] = nested_payload
+                        collected_blocks.append(
+                            {
+                                "type": "tool_use",
+                                "id": nested_call_id,
+                                "name": nested_tool_name,
+                                "input": nested_payload,
+                                "segment_index": nested_segment,
+                                "parent_tool_use_id": tc.id,
+                            }
+                        )
+                        continue
+
+                    if kind == "result":
+                        nested_segment = nested_segment_by_call_id.get(nested_call_id, _next_segment())
+                        nested_segment_by_call_id[nested_call_id] = nested_segment
+                        nested_result = nested.get("result") if isinstance(nested.get("result"), dict) else {}
+                        await emit(
+                            {
+                                "type": "main_agent_tool_result",
+                                "thread_id": thread_id,
+                                "run_id": run_id,
+                                "segment_index": nested_segment,
+                                "tool_use_id": nested_call_id,
+                                "tool_name": nested_tool_name,
+                                "result": nested_result,
+                                "parent_tool_use_id": tc.id,
+                            }
+                        )
+                        await self.store.record_tool_result(
+                            thread_id=thread_id,
+                            tool_call_id=nested_call_id,
+                            tool_name=nested_tool_name,
+                            status=str(nested_result.get("status") or "unknown"),
+                            output=nested_result.get("output") if isinstance(nested_result.get("output"), dict) else None,
+                            error=nested_result.get("error") if isinstance(nested_result.get("error"), dict) else None,
+                            visible_to_model=False,
+                        )
+                        tool_call_index += 1
+                        write_tool_io_file(
+                            thread_id=thread_id,
+                            tool_name=nested_tool_name,
+                            tool_call_index=tool_call_index,
+                            tool_use_id=nested_call_id,
+                            user_index=user_msg_index,
+                            request_index=request_index,
+                            run_id=run_id,
+                            arguments=nested_payload_by_call_id.get(nested_call_id, {}),
+                            result=nested_result,
+                            status=str(nested_result.get("status") or "unknown"),
+                            error=(nested_result.get("error") or {}).get("message")
+                            if isinstance(nested_result.get("error"), dict)
+                            else None,
+                            started_at=nested_started_at.get(nested_call_id),
+                            finished_at=str(nested.get("finished_at") or _utc_iso()),
+                        )
+                        collected_blocks.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": nested_call_id,
+                                "content": nested_result,
+                                "segment_index": nested_segment,
+                                "parent_tool_use_id": tc.id,
+                            }
+                        )
 
                 await emit(
                     {

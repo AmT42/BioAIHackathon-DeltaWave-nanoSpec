@@ -52,6 +52,15 @@ class Settings:
     enable_longevity_tools: bool
     enable_optional_source_tools: bool
     enable_builtin_demo_tools: bool
+    agent_execution_mode: str
+    repl_workspace_root: Path
+    repl_max_wall_time_seconds: int
+    repl_max_stdout_bytes: int
+    repl_max_tool_calls_per_exec: int
+    repl_session_ttl_seconds: int
+    repl_max_sessions: int
+    repl_allowed_command_prefixes: tuple[str, ...]
+    repl_blocked_command_prefixes: tuple[str, ...]
 
 
 def _normalize_reasoning_effort(value: str | None) -> str:
@@ -87,6 +96,19 @@ def _env_int(name: str, default: int | None = None) -> int | None:
     return value if value >= 0 else default
 
 
+def _env_csv(name: str, default: str) -> tuple[str, ...]:
+    raw = os.getenv(name, default)
+    values = [item.strip() for item in str(raw).split(",")]
+    return tuple(item for item in values if item)
+
+
+def _normalize_agent_execution_mode(value: str | None) -> str:
+    normalized = (value or "repl_only").strip().lower()
+    if normalized in {"repl_only"}:
+        return normalized
+    return "repl_only"
+
+
 def get_settings() -> Settings:
     _load_env_file()
     backend_root = Path(__file__).resolve().parents[1]
@@ -97,6 +119,15 @@ def get_settings() -> Settings:
     enable_literature_tools = _env_bool("ENABLE_LITERATURE_TOOLS", default=True)
     enable_pubmed_tools = _env_bool("ENABLE_PUBMED_TOOLS", default=enable_literature_tools)
     enable_openalex_tools = _env_bool("ENABLE_OPENALEX_TOOLS", default=enable_literature_tools)
+    workspace_root = Path(os.getenv("REPL_WORKSPACE_ROOT", str(backend_root.parent))).expanduser().resolve()
+    allowed_prefixes = _env_csv(
+        "REPL_ALLOWED_COMMAND_PREFIXES",
+        "pwd,ls,cat,head,tail,rg,grep,find,git,python,python3,pytest,npm,node,make,bash,curl,wget",
+    )
+    blocked_prefixes = _env_csv(
+        "REPL_BLOCKED_COMMAND_PREFIXES",
+        "rm,shutdown,reboot,mkfs,dd,sudo,ssh,scp,nc,nmap,chmod,chown",
+    )
 
     return Settings(
         database_url=os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./chat.db"),
@@ -130,4 +161,13 @@ def get_settings() -> Settings:
         enable_longevity_tools=_env_bool("ENABLE_LONGEVITY_TOOLS", default=True),
         enable_optional_source_tools=_env_bool("ENABLE_OPTIONAL_SOURCE_TOOLS", default=True),
         enable_builtin_demo_tools=_env_bool("ENABLE_BUILTIN_DEMO_TOOLS", default=False),
+        agent_execution_mode=_normalize_agent_execution_mode(os.getenv("AGENT_EXECUTION_MODE", "repl_only")),
+        repl_workspace_root=workspace_root,
+        repl_max_wall_time_seconds=int(_env_int("REPL_MAX_WALL_TIME_SECONDS", default=120) or 120),
+        repl_max_stdout_bytes=int(_env_int("REPL_MAX_STDOUT_BYTES", default=65536) or 65536),
+        repl_max_tool_calls_per_exec=int(_env_int("REPL_MAX_TOOL_CALLS_PER_EXEC", default=200) or 200),
+        repl_session_ttl_seconds=int(_env_int("REPL_SESSION_TTL_SECONDS", default=86_400) or 86_400),
+        repl_max_sessions=int(_env_int("REPL_MAX_SESSIONS", default=500) or 500),
+        repl_allowed_command_prefixes=allowed_prefixes,
+        repl_blocked_command_prefixes=blocked_prefixes,
     )
