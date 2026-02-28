@@ -30,6 +30,23 @@ export const initialChatState: ChatState = {
   error: null,
 };
 
+const DISPLAYABLE_TOP_LEVEL_TOOLS = new Set(["repl_exec", "bash_exec"]);
+
+function normalizeToolName(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function isDisplayableTopLevelToolName(value: unknown): boolean {
+  const toolName = normalizeToolName(value);
+  return toolName ? DISPLAYABLE_TOP_LEVEL_TOOLS.has(toolName) : false;
+}
+
+function isUiVisible(value: unknown): boolean {
+  return value !== false;
+}
+
 function makeTurn(partial?: Partial<Turn>): Turn {
   return {
     id: partial?.id ?? `turn-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -105,6 +122,21 @@ function appendWorkToken(workSteps: WorkStep[], id: string, token: string): Work
   return next;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function appendChunk(existing: string | undefined, incoming: string | undefined): string {
+  const current = existing ?? "";
+  const chunk = incoming ?? "";
+  if (!chunk) return current;
+  if (!current) return chunk;
+  if (chunk.startsWith(current)) return chunk;
+  if (current.endsWith(chunk)) return current;
+  return `${current}${chunk}`;
+}
+
 function parseTraceToSteps(message: HydratedMessage): { assistantText: string; steps: WorkStep[] } {
   const metadata = message.metadata ?? {};
   const trace = (metadata.trace_v1 ?? {}) as Record<string, unknown>;
@@ -155,27 +187,114 @@ function parseTraceToSteps(message: HydratedMessage): { assistantText: string; s
 
     if (blockType === "tool_use") {
       const toolUseId = String(block.id ?? block.tool_use_id ?? `tool-${message.id}-${segmentIndex}`);
-      const toolName = String(block.name ?? "tool");
+      const toolName = normalizeToolName(block.name) ?? "tool";
+      const blockVisible = isUiVisible(block.ui_visible);
+      const parentToolUseId =
+        typeof block.parent_tool_use_id === "string" && block.parent_tool_use_id.trim().length > 0
+          ? block.parent_tool_use_id
+          : undefined;
+      if (!blockVisible) {
+        index += 1;
+        continue;
+      }
+      if (parentToolUseId) {
+        const parentStepId = toolIndex.get(parentToolUseId) ?? `hist-tool-${parentToolUseId}`;
+        const parent = steps.find((step) => step.id === parentStepId);
+        if (parent?.toolName === "repl_exec") {
+          index += 1;
+          continue;
+        }
+      } else if (!isDisplayableTopLevelToolName(toolName)) {
+        index += 1;
+        continue;
+      }
+      const input = asRecord(block.input);
+      const code = toolName === "repl_exec" && typeof input?.code === "string" ? input.code : undefined;
+      const command = toolName === "bash_exec" && typeof input?.command === "string" ? input.command : undefined;
+      const stepKind: WorkStep["kind"] = toolName === "repl_exec" ? "repl" : "tool";
+      const label =
+        toolName === "repl_exec"
+          ? "Running Python REPL"
+          : toolName === "bash_exec"
+            ? "Running bash command"
+            : `Using ${toolName}`;
       toolIndex.set(toolUseId, `hist-tool-${toolUseId}`);
       steps = upsertWorkStep(steps, {
         id: `hist-tool-${toolUseId}`,
-        kind: "tool",
-        text: `Using ${toolName}`,
+        kind: stepKind,
+        text: label,
         status: "done",
         segmentIndex,
         toolUseId,
         toolName,
+        code,
+        command,
       });
     }
 
     if (blockType === "tool_result") {
       const toolUseId = String(block.tool_use_id ?? block.id ?? `tool-result-${message.id}-${segmentIndex}`);
-      const resultText = safeJson(block.content ?? block.result ?? "").trim();
+      const blockVisible = isUiVisible(block.ui_visible);
+      const blockToolName = normalizeToolName(block.name);
+      const parentToolUseId =
+        typeof block.parent_tool_use_id === "string" && block.parent_tool_use_id.trim().length > 0
+          ? block.parent_tool_use_id
+          : undefined;
+      if (!blockVisible) {
+        index += 1;
+        continue;
+      }
+      if (parentToolUseId) {
+        const parentStepId = toolIndex.get(parentToolUseId) ?? `hist-tool-${parentToolUseId}`;
+        const parent = steps.find((step) => step.id === parentStepId);
+        if (parent?.toolName === "repl_exec") {
+          index += 1;
+          continue;
+        }
+      }
+      const resultPayload = asRecord(block.content) ?? asRecord(block.result);
       const targetStepId = toolIndex.get(toolUseId) ?? `hist-tool-${toolUseId}`;
       const existing = steps.find((step) => step.id === targetStepId);
-      const nextText = existing
-        ? `${existing.text}\n\nResult:\n${resultText}`
-        : `Result:\n${resultText}`;
+      const toolName = existing?.toolName ?? blockToolName;
+      if (!toolName || !isDisplayableTopLevelToolName(toolName)) {
+        index += 1;
+        continue;
+      }
+
+      if (toolName === "repl_exec" || toolName === "bash_exec") {
+        const output = asRecord(resultPayload?.output);
+        const stdout = appendChunk(existing?.stdout, typeof output?.stdout === "string" ? output.stdout : undefined);
+        const stderr = appendChunk(existing?.stderr, typeof output?.stderr === "string" ? output.stderr : undefined);
+        const command =
+          toolName === "bash_exec"
+            ? typeof output?.command === "string"
+              ? output.command
+              : existing?.command
+            : existing?.command;
+        const code = toolName === "repl_exec" ? existing?.code : undefined;
+        const statusRaw = String(resultPayload?.status ?? "");
+        const nextStatus: WorkStep["status"] =
+          statusRaw === "error" ? "error" : "done";
+
+        steps = upsertWorkStep(steps, {
+          id: targetStepId,
+          kind: toolName === "repl_exec" ? "repl" : "tool",
+          text: existing?.text ?? (toolName === "repl_exec" ? "Running Python REPL" : "Running bash command"),
+          status: nextStatus,
+          segmentIndex,
+          toolUseId,
+          toolName,
+          code,
+          command,
+          stdout,
+          stderr,
+          result: resultPayload ?? undefined,
+        });
+        continue;
+      }
+
+      const resultText = safeJson(resultPayload ?? block.content ?? block.result ?? "").trim();
+      const nextText = existing ? `${existing.text}\n\nResult:\n${resultText}` : `Result:\n${resultText}`;
       steps = upsertWorkStep(steps, {
         id: targetStepId,
         kind: "tool",
@@ -313,12 +432,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case "main_agent_thinking_token": {
-      if (!event.token) return baseState;
+      const token = typeof event.token === "string" ? event.token : typeof event.content === "string" ? event.content : "";
+      if (!token) return baseState;
       const ensured = ensureTurn(baseState.turns, runId);
       const nextTurns = [...ensured.turns];
       const target = nextTurns[ensured.index];
       const stepId = `thinking-${runId ?? "norun"}-${event.segment_index ?? 0}`;
-      target.workSteps = appendWorkToken(target.workSteps, stepId, event.token);
+      target.workSteps = appendWorkToken(target.workSteps, stepId, token);
       nextTurns[ensured.index] = target;
       return { ...baseState, turns: nextTurns };
     }
@@ -371,11 +491,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case "main_agent_segment_token": {
-      if (!event.token) return baseState;
+      const token = typeof event.token === "string" ? event.token : typeof event.content === "string" ? event.content : "";
+      if (!token) return baseState;
       const ensured = ensureTurn(baseState.turns, runId);
       const nextTurns = [...ensured.turns];
       const target = nextTurns[ensured.index];
-      target.assistantText = `${target.assistantText}${event.token}`;
+      target.assistantText = `${target.assistantText}${token}`;
       target.status = "streaming";
       nextTurns[ensured.index] = target;
       return { ...baseState, turns: nextTurns };
@@ -386,7 +507,15 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const nextTurns = [...ensured.turns];
       const target = nextTurns[ensured.index];
       if (typeof event.content === "string" && event.content.trim().length > 0) {
-        target.assistantText = event.content;
+        const current = target.assistantText;
+        const incoming = event.content;
+        if (!current) {
+          target.assistantText = incoming;
+        } else if (incoming.startsWith(current)) {
+          target.assistantText = incoming;
+        } else if (!current.endsWith(incoming)) {
+          target.assistantText = `${current}${incoming}`;
+        }
       }
       target.assistantMessageId = event.message_id ?? target.assistantMessageId;
       target.status = "streaming";
@@ -395,26 +524,186 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case "main_agent_tool_start": {
+      if (event.parent_tool_use_id) return baseState;
+      if (!isUiVisible(event.ui_visible)) return baseState;
+      if (!isDisplayableTopLevelToolName(event.tool_name)) return baseState;
+      if (event.tool_name === "repl_exec") return baseState;
       const ensured = ensureTurn(baseState.turns, runId);
       const nextTurns = [...ensured.turns];
       const target = nextTurns[ensured.index];
       const toolUseId = event.tool_use_id ?? `tool-${runId ?? "norun"}-${event.segment_index ?? 0}`;
       const toolLabel = event.tool_name ?? toolUseId;
+      const command = event.tool_name === "bash_exec" ? "" : undefined;
+      const label = event.tool_name === "bash_exec" ? "Running bash command" : `Using ${toolLabel}`;
       target.workSteps = upsertWorkStep(target.workSteps, {
         id: `tool-${toolUseId}`,
         kind: "tool",
-        text: `Using ${toolLabel}`,
+        text: label,
         status: "streaming",
         segmentIndex: event.segment_index,
         toolUseId,
         toolName: event.tool_name,
+        command,
       });
       target.status = "streaming";
       nextTurns[ensured.index] = target;
       return { ...baseState, turns: nextTurns };
     }
 
+    case "main_agent_bash_command_token": {
+      if (!isUiVisible(event.ui_visible)) return baseState;
+      const token = typeof event.token === "string" ? event.token : typeof event.content === "string" ? event.content : "";
+      if (!token) return baseState;
+      const ensured = ensureTurn(baseState.turns, runId);
+      const nextTurns = [...ensured.turns];
+      const target = nextTurns[ensured.index];
+      const toolUseId = event.tool_use_id ?? `tool-${runId ?? "norun"}-${event.segment_index ?? 0}`;
+      const stepId = `tool-${toolUseId}`;
+      const existing = target.workSteps.find((step) => step.id === stepId);
+      target.workSteps = upsertWorkStep(target.workSteps, {
+        id: stepId,
+        kind: "tool",
+        text: existing?.text ?? "Running bash command",
+        status: existing?.status ?? "streaming",
+        segmentIndex: event.segment_index,
+        toolUseId,
+        toolName: "bash_exec",
+        command: appendChunk(existing?.command, token),
+        stdout: existing?.stdout ?? "",
+        stderr: existing?.stderr ?? "",
+        result: existing?.result,
+      });
+      nextTurns[ensured.index] = target;
+      return { ...baseState, turns: nextTurns };
+    }
+
+    case "main_agent_repl_start": {
+      const ensured = ensureTurn(baseState.turns, runId);
+      const nextTurns = [...ensured.turns];
+      const target = nextTurns[ensured.index];
+      const toolUseId = event.tool_use_id ?? `repl-${runId ?? "norun"}-${event.segment_index ?? 0}`;
+      const code = typeof event.code === "string" ? event.code : "";
+      target.workSteps = upsertWorkStep(target.workSteps, {
+        id: `repl-${toolUseId}`,
+        kind: "repl",
+        text: "Running Python REPL",
+        status: "streaming",
+        segmentIndex: event.segment_index,
+        toolUseId,
+        toolName: "repl_exec",
+        code,
+        stdout: "",
+        stderr: "",
+      });
+      target.status = "streaming";
+      nextTurns[ensured.index] = target;
+      return { ...baseState, turns: nextTurns };
+    }
+
+    case "main_agent_repl_code_token": {
+      const token = typeof event.token === "string" ? event.token : typeof event.content === "string" ? event.content : "";
+      if (!token) return baseState;
+      const ensured = ensureTurn(baseState.turns, runId);
+      const nextTurns = [...ensured.turns];
+      const target = nextTurns[ensured.index];
+      const toolUseId = event.tool_use_id ?? `repl-${runId ?? "norun"}-${event.segment_index ?? 0}`;
+      const stepId = `repl-${toolUseId}`;
+      const existing = target.workSteps.find((step) => step.id === stepId);
+      target.workSteps = upsertWorkStep(target.workSteps, {
+        id: stepId,
+        kind: "repl",
+        text: existing?.text ?? "Running Python REPL",
+        status: existing?.status ?? "streaming",
+        segmentIndex: event.segment_index,
+        toolUseId,
+        toolName: "repl_exec",
+        code: appendChunk(existing?.code, token),
+        stdout: existing?.stdout ?? "",
+        stderr: existing?.stderr ?? "",
+      });
+      nextTurns[ensured.index] = target;
+      return { ...baseState, turns: nextTurns };
+    }
+
+    case "main_agent_repl_stdout": {
+      const ensured = ensureTurn(baseState.turns, runId);
+      const nextTurns = [...ensured.turns];
+      const target = nextTurns[ensured.index];
+      const toolUseId = event.tool_use_id ?? `repl-${runId ?? "norun"}-${event.segment_index ?? 0}`;
+      const stepId = `repl-${toolUseId}`;
+      const existing = target.workSteps.find((step) => step.id === stepId);
+      const content = typeof event.content === "string" ? event.content : typeof event.token === "string" ? event.token : "";
+      target.workSteps = upsertWorkStep(target.workSteps, {
+        id: stepId,
+        kind: "repl",
+        text: existing?.text ?? "Running Python REPL",
+        status: "streaming",
+        segmentIndex: event.segment_index,
+        toolUseId,
+        toolName: "repl_exec",
+        code: existing?.code,
+        stdout: appendChunk(existing?.stdout, content),
+        stderr: existing?.stderr ?? "",
+      });
+      nextTurns[ensured.index] = target;
+      return { ...baseState, turns: nextTurns };
+    }
+
+    case "main_agent_repl_stderr": {
+      const ensured = ensureTurn(baseState.turns, runId);
+      const nextTurns = [...ensured.turns];
+      const target = nextTurns[ensured.index];
+      const toolUseId = event.tool_use_id ?? `repl-${runId ?? "norun"}-${event.segment_index ?? 0}`;
+      const stepId = `repl-${toolUseId}`;
+      const existing = target.workSteps.find((step) => step.id === stepId);
+      const content = typeof event.content === "string" ? event.content : typeof event.token === "string" ? event.token : "";
+      target.workSteps = upsertWorkStep(target.workSteps, {
+        id: stepId,
+        kind: "repl",
+        text: existing?.text ?? "Running Python REPL",
+        status: "streaming",
+        segmentIndex: event.segment_index,
+        toolUseId,
+        toolName: "repl_exec",
+        code: existing?.code,
+        stdout: existing?.stdout ?? "",
+        stderr: appendChunk(existing?.stderr, content),
+      });
+      nextTurns[ensured.index] = target;
+      return { ...baseState, turns: nextTurns };
+    }
+
+    case "main_agent_repl_end": {
+      const ensured = ensureTurn(baseState.turns, runId);
+      const nextTurns = [...ensured.turns];
+      const target = nextTurns[ensured.index];
+      const toolUseId = event.tool_use_id ?? `repl-${runId ?? "norun"}-${event.segment_index ?? 0}`;
+      const stepId = `repl-${toolUseId}`;
+      const existing = target.workSteps.find((step) => step.id === stepId);
+      const resultPayload = event.result ?? {};
+      const nextStatus = resultPayload.status === "error" ? "error" : "done";
+      const output = asRecord(resultPayload.output);
+      target.workSteps = upsertWorkStep(target.workSteps, {
+        id: stepId,
+        kind: "repl",
+        text: existing?.text ?? "Running Python REPL",
+        status: nextStatus,
+        segmentIndex: event.segment_index,
+        toolUseId,
+        toolName: "repl_exec",
+        code: existing?.code,
+        stdout: appendChunk(existing?.stdout, typeof output?.stdout === "string" ? output.stdout : undefined),
+        stderr: appendChunk(existing?.stderr, typeof output?.stderr === "string" ? output.stderr : undefined),
+        result: resultPayload,
+      });
+      nextTurns[ensured.index] = target;
+      return { ...baseState, turns: nextTurns };
+    }
+
     case "main_agent_tool_result": {
+      if (event.parent_tool_use_id) return baseState;
+      if (!isUiVisible(event.ui_visible)) return baseState;
+      if (event.tool_name === "repl_exec") return baseState;
       const ensured = ensureTurn(baseState.turns, runId);
       const nextTurns = [...ensured.turns];
       const target = nextTurns[ensured.index];
@@ -422,6 +711,33 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const stepId = `tool-${toolUseId}`;
       const existing = target.workSteps.find((step) => step.id === stepId);
       const resultPayload = event.result ?? {};
+      const toolName = existing?.toolName ?? event.tool_name;
+      if (!isDisplayableTopLevelToolName(toolName)) return baseState;
+      if (toolName === "bash_exec") {
+        const output = asRecord(resultPayload.output);
+        const statusRaw = String(resultPayload.status ?? "");
+        const nextStatus: WorkStep["status"] =
+          statusRaw === "success" || statusRaw === "completed"
+            ? "done"
+            : statusRaw === "streaming"
+              ? "streaming"
+              : "error";
+        target.workSteps = upsertWorkStep(target.workSteps, {
+          id: stepId,
+          kind: "tool",
+          text: existing?.text ?? "Running bash command",
+          status: nextStatus,
+          segmentIndex: event.segment_index,
+          toolUseId,
+          toolName: "bash_exec",
+          command: typeof output?.command === "string" ? output.command : existing?.command,
+          stdout: appendChunk(existing?.stdout, typeof output?.stdout === "string" ? output.stdout : undefined),
+          stderr: appendChunk(existing?.stderr, typeof output?.stderr === "string" ? output.stderr : undefined),
+          result: resultPayload,
+        });
+        nextTurns[ensured.index] = target;
+        return { ...baseState, turns: nextTurns };
+      }
       const nextStatus =
         resultPayload.status === "success" || resultPayload.status === "completed"
           ? "done"
@@ -433,7 +749,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         status: nextStatus,
         segmentIndex: event.segment_index,
         toolUseId,
-        toolName: existing?.toolName ?? event.tool_name,
+        toolName,
       });
       nextTurns[ensured.index] = target;
       return { ...baseState, turns: nextTurns };

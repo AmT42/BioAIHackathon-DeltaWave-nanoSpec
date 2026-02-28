@@ -135,6 +135,7 @@ async def test_bash_exec_runs_as_provider_tool() -> None:
     tool_results = [evt for evt in events if evt.get("type") == "main_agent_tool_result"]
     assert tool_results
     last_result = tool_results[-1]
+    assert last_result.get("tool_name") == "bash_exec"
     result_payload = last_result.get("result") if isinstance(last_result.get("result"), dict) else {}
     assert str(result_payload.get("status")) == "success"
     output = result_payload.get("output") if isinstance(result_payload.get("output"), dict) else {}

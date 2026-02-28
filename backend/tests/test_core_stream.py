@@ -99,8 +99,17 @@ async def test_core_writes_limit_message_when_iterations_exhausted_without_text(
         assert "tool-iteration limit (2)" in result["content"]
         assert events[-1]["type"] == "main_agent_complete"
         assert "tool-iteration limit (2)" in str((events[-1].get("message") or {}).get("content", ""))
+        assert not any(evt.get("type") == "main_agent_tool_start" for evt in events)
+        assert not any(evt.get("type") == "main_agent_tool_result" for evt in events)
 
         messages = await store.get_thread_messages(thread.id, skip=0, limit=200)
         assistant_messages = [msg for msg in messages if msg.role == MessageRole.ASSISTANT]
         assert assistant_messages
         assert "tool-iteration limit (2)" in (assistant_messages[-1].content or "")
+        trace = (assistant_messages[-1].message_metadata or {}).get("trace_v1")
+        assert isinstance(trace, dict)
+        blocks = trace.get("content_blocks_normalized")
+        assert isinstance(blocks, list)
+        calc_blocks = [block for block in blocks if str(block.get("name") or "") == "calc"]
+        assert calc_blocks
+        assert all(block.get("ui_visible") is False for block in calc_blocks)
