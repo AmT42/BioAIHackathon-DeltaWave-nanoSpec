@@ -370,8 +370,12 @@ def test_repl_caps_long_printed_line_and_writes_artifact(tmp_path: Path) -> None
     assert out.stdout_capping.get("lines_capped") == 1
     assert out.artifacts
     artifact_path = Path(str(out.artifacts[0].get("path") or ""))
+    display_path = str(out.artifacts[0].get("display_path") or "")
     assert artifact_path.exists()
     assert "repl_stdout" in str(artifact_path)
+    assert "thread-" not in str(artifact_path)
+    assert display_path and not display_path.startswith("/")
+    assert "saved to " + display_path in out.stdout
     artifact_text = artifact_path.read_text(encoding="utf-8")
     assert "REPL Stdout Full Line" in artifact_text
     assert "X" * 200 in artifact_text
@@ -411,6 +415,22 @@ def test_repl_supports_globals_and_locals_builtins() -> None:
 
     assert out.error is None
     assert "True\nTrue\nTrue" in out.stdout
+
+
+def test_repl_exposes_open_builtin() -> None:
+    runtime = _runtime()
+
+    out = runtime.execute(
+        thread_id="thread-d3",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code="print(callable(open))",
+    )
+
+    assert out.error is None
+    assert "True" in out.stdout
 
 
 def test_repl_blocks_unsafe_imports() -> None:

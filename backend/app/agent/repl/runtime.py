@@ -799,6 +799,7 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
         "min",
         "next",
         "object",
+        "open",
         "print",
         "repr",
         "range",
@@ -1055,12 +1056,15 @@ class ReplRuntime:
         lazy_install_index_url: str | None = None,
     ) -> None:
         self.tools = tools
+        self.workspace_root = Path(workspace_root).resolve()
         self.max_wall_time_seconds = max(1, int(max_wall_time_seconds))
         self.max_stdout_bytes = max(1024, int(max_stdout_bytes))
         self.stdout_soft_line_limit = max(120, int(stdout_soft_line_limit))
         self.stdout_max_line_artifacts = max(1, int(stdout_max_line_artifacts))
         self.max_tool_calls_per_exec = max(1, int(max_tool_calls_per_exec))
         self.artifact_root = Path(artifact_root).resolve() if artifact_root is not None else None
+        self._stdout_artifact_seq = 0
+        self._stdout_artifact_seq_lock = threading.Lock()
         self.shell_policy_mode = shell_policy_mode if shell_policy_mode in {"guarded", "open"} else "open"
         self.env_snapshot_mode = (
             env_snapshot_mode if env_snapshot_mode in {"off", "debug", "always"} else "always"
@@ -1122,6 +1126,11 @@ class ReplRuntime:
                 max_output_bytes=self.max_stdout_bytes,
             )
         )
+
+    def _next_stdout_artifact_seq(self) -> int:
+        with self._stdout_artifact_seq_lock:
+            self._stdout_artifact_seq += 1
+            return self._stdout_artifact_seq
 
     def _is_import_denied(self, module_name: str) -> bool:
         normalized = str(module_name or "").strip()
@@ -1274,34 +1283,45 @@ class ReplRuntime:
             return text, False
         return encoded[: self.max_stdout_bytes].decode("utf-8", errors="replace"), True
 
-    def _stdout_artifact_dir(self, *, thread_id: str, run_id: str, execution_id: str) -> Path | None:
+    def _stdout_artifact_dir(
+        self,
+        *,
+        user_msg_index: int,
+        request_index: int,
+        exec_seq: int,
+    ) -> Path | None:
         if self.artifact_root is None:
             return None
         day = datetime.now(timezone.utc).strftime("%Y%m%d")
-        thread_label = _safe_path_segment(thread_id, "thread")[:16]
-        run_label = _safe_path_segment(run_id, "run")[:16]
-        exec_label = _safe_path_segment(execution_id, "exec")[:32]
-        return (
-            self.artifact_root
-            / "repl_stdout"
-            / day
-            / f"thread-{thread_label}__run-{run_label}__exec-{exec_label}"
-        )
+        return self.artifact_root / "repl_stdout" / day / f"m{user_msg_index:04d}_r{request_index:04d}_e{exec_seq:04d}"
+
+    def _display_artifact_path(self, path: Path) -> str:
+        try:
+            rel = path.resolve().relative_to(self.workspace_root)
+            return str(rel)
+        except Exception:
+            return str(path)
 
     def _write_long_stdout_artifact(
         self,
         *,
+        user_msg_index: int,
+        request_index: int,
+        exec_seq: int,
         thread_id: str,
         run_id: str,
         execution_id: str,
         line_number: int,
         line_text: str,
     ) -> dict[str, Any] | None:
-        base = self._stdout_artifact_dir(thread_id=thread_id, run_id=run_id, execution_id=execution_id)
+        base = self._stdout_artifact_dir(
+            user_msg_index=user_msg_index,
+            request_index=request_index,
+            exec_seq=exec_seq,
+        )
         if base is None:
             return None
-        slug = _slug_from_text(line_text, fallback=f"line_{line_number:04d}")
-        file_name = f"line-{line_number:04d}__chars-{len(line_text)}__{slug}.md"
+        file_name = f"stdout_line_{line_number:04d}_chars{len(line_text)}.md"
         path = base / file_name
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -1321,12 +1341,14 @@ class ReplRuntime:
             )
         except Exception:
             return None
-        quoted_path = shlex.quote(str(path))
+        display_path = self._display_artifact_path(path)
+        quoted_path = shlex.quote(display_path)
         preview = " ".join(line_text.split())[:160]
         return {
             "kind": "repl_stdout_full_line",
             "name": file_name,
             "path": str(path),
+            "display_path": display_path,
             "line_number": line_number,
             "chars": len(line_text),
             "preview": preview,
@@ -1338,6 +1360,9 @@ class ReplRuntime:
         self,
         *,
         text: str,
+        user_msg_index: int,
+        request_index: int,
+        exec_seq: int,
         thread_id: str,
         run_id: str,
         execution_id: str,
@@ -1364,6 +1389,9 @@ class ReplRuntime:
             artifact_entry: dict[str, Any] | None = None
             if len(artifacts) < self.stdout_max_line_artifacts:
                 artifact_entry = self._write_long_stdout_artifact(
+                    user_msg_index=user_msg_index,
+                    request_index=request_index,
+                    exec_seq=exec_seq,
                     thread_id=thread_id,
                     run_id=run_id,
                     execution_id=execution_id,
@@ -1374,9 +1402,10 @@ class ReplRuntime:
                     artifacts.append(artifact_entry)
 
             if artifact_entry is not None:
+                display_path = str(artifact_entry.get("display_path") or artifact_entry.get("path"))
                 note = (
                     f"[stdout line capped at {self.stdout_soft_line_limit} chars; full line ({len(body)} chars) "
-                    f"saved to {artifact_entry['path']}; inspect with {artifact_entry['inspect_sed']} "
+                    f"saved to {display_path}; inspect with {artifact_entry['inspect_sed']} "
                     f"or {artifact_entry['inspect_rg']}]"
                 )
             else:
@@ -1465,8 +1494,12 @@ class ReplRuntime:
         stdout_artifacts: list[dict[str, Any]] = []
         stdout_capping: dict[str, Any] | None = None
         if raw_stdout:
+            exec_seq = self._next_stdout_artifact_seq()
             raw_stdout, stdout_artifacts, capped_lines = self._cap_long_stdout_lines(
                 text=raw_stdout,
+                user_msg_index=user_msg_index,
+                request_index=request_index,
+                exec_seq=exec_seq,
                 thread_id=thread_id,
                 run_id=run_id,
                 execution_id=execution_id,
