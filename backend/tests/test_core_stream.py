@@ -5,6 +5,7 @@ import uuid
 
 import pytest
 
+from app.agent import core as core_module
 from app.agent.core import AgentCore
 from app.agent.tools.builtin import create_builtin_registry
 from app.agent.types import ProviderStreamResult, ToolCall
@@ -163,3 +164,82 @@ async def test_core_writes_limit_message_when_iterations_exhausted_without_text(
         calc_blocks = [block for block in blocks if str(block.get("name") or "") == "calc"]
         assert calc_blocks
         assert all(block.get("ui_visible") is False for block in calc_blocks)
+
+
+@pytest.mark.asyncio
+async def test_core_emits_reprompt_required_when_runtime_code_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    await init_db()
+    settings = replace(
+        get_settings(),
+        mock_llm=True,
+        gemini_api_key=None,
+        gemini_model="gemini/gemini-3-flash",
+        repl_controlled_reload_enabled=False,
+    )
+
+    class _SequenceProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def stream_turn(self, **_kwargs: object) -> ProviderStreamResult:
+            self.calls += 1
+            if self.calls == 1:
+                return ProviderStreamResult(
+                    text="Applying runtime patch.",
+                    thinking="planning",
+                    tool_calls=[
+                        ToolCall(
+                            id=f"repl_call_{uuid.uuid4().hex[:8]}",
+                            name="repl_exec",
+                            input={"code": "print('patched')"},
+                        )
+                    ],
+                    provider_state={"provider": "gemini", "mock": True},
+                )
+            return ProviderStreamResult(
+                text="Patch complete.",
+                thinking="done",
+                tool_calls=[],
+                provider_state={"provider": "gemini", "mock": True},
+            )
+
+    status_calls = {"count": 0}
+
+    def _fake_git_status(_repo_root) -> set[str]:
+        status_calls["count"] += 1
+        if status_calls["count"] <= 1:
+            return set()
+        return {"backend/app/agent/prompt.py"}
+
+    monkeypatch.setattr(core_module, "_git_status_files", _fake_git_status)
+
+    async with SessionLocal() as session:
+        store = ChatStore(session)
+        thread = await store.create_thread()
+        core = AgentCore(settings=settings, store=store, tools=create_builtin_registry())
+        core._providers["gemini"] = _SequenceProvider()  # type: ignore[assignment]
+
+        events: list[dict] = []
+
+        async def emit(event: dict) -> None:
+            events.append(event)
+
+        result = await core.run_turn_stream(
+            thread_id=thread.id,
+            provider="gemini",
+            user_message="apply patch",
+            emit=emit,
+            max_iterations=3,
+        )
+
+        reprompt_events = [event for event in events if event.get("type") == "main_agent_reprompt_required"]
+        assert reprompt_events
+        assert "runtime code was updated" in str(reprompt_events[-1].get("content") or "").lower()
+        assert "Please send another prompt" in result["content"]
+
+        messages = await store.get_thread_messages(thread.id, skip=0, limit=200)
+        assistant_messages = [msg for msg in messages if msg.role == MessageRole.ASSISTANT]
+        assert assistant_messages
+        metadata = assistant_messages[-1].message_metadata or {}
+        assert metadata.get("reprompt_required") is True
+        assert metadata.get("runtime_code_updated") is True

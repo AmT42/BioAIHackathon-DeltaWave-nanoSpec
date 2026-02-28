@@ -141,6 +141,24 @@ class ToolResultHandle:
             return sorted(str(key) for key in data.keys())
         return []
 
+    def get(self, key: str, default: Any = None) -> Any:
+        data = self._payload.get("data")
+        if isinstance(data, dict):
+            return data.get(key, default)
+        return default
+
+    def __getitem__(self, key: Any) -> Any:
+        data = self._payload.get("data")
+        if isinstance(data, dict):
+            return data[key]
+        raise TypeError("ToolResultHandle data is not a mapping")
+
+    def __getattr__(self, name: str) -> Any:
+        data = self._payload.get("data")
+        if isinstance(data, dict) and name in data:
+            return data[name]
+        raise AttributeError(name)
+
     def shape(self) -> dict[str, Any]:
         data = self._payload.get("data")
         if isinstance(data, dict):

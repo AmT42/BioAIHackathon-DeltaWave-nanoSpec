@@ -898,11 +898,27 @@ def build_normalization_tools(http: SimpleHttpClient, settings: Settings | None 
             intervention_terms=clean_terms,
             outcome_terms=outcome_terms or None,
         )
+        compatibility_queries = {
+            **queries,
+            "sr_meta": queries.get("systematic_reviews"),
+            "rct": queries.get("rcts"),
+        }
         return make_tool_output(
             source="internal",
             summary=f"Built {len(queries)} PubMed evidence query template(s).",
-            data={"queries": queries, "intervention_terms": clean_terms, "outcome_terms": outcome_terms},
-            ids=list(queries.keys()),
+            data={
+                "queries": queries,
+                "compatibility_queries": compatibility_queries,
+                "intervention_terms": clean_terms,
+                "outcome_terms": outcome_terms,
+                "systematic_reviews": queries.get("systematic_reviews"),
+                "rcts": queries.get("rcts"),
+                "observational": queries.get("observational"),
+                "broad": queries.get("broad"),
+                "sr_meta": queries.get("systematic_reviews"),
+                "rct": queries.get("rcts"),
+            },
+            ids=list(compatibility_queries.keys()),
             ctx=ctx,
         )
 

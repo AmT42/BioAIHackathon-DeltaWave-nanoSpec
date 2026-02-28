@@ -12,6 +12,14 @@ from app.agent.repl.types import ShellResult
 
 
 _SPLIT_PATTERN = re.compile(r"[|;&]{1,2}")
+_SECRET_PATH_PATTERN = re.compile(
+    r"(^|[\s\"'`])(\.env($|[.\s/])|id_rsa\b|\.pem\b|credentials\.json\b|service-account)",
+    flags=re.IGNORECASE,
+)
+_WRITE_INTENT_PATTERN = re.compile(
+    r"(>\s*[^|]+|>>\s*[^|]+|\btee\b|\bcp\b|\bmv\b|\bsed\s+-i\b|\btouch\b|\btruncate\b)",
+    flags=re.IGNORECASE,
+)
 ChunkCallback = Callable[[str], None]
 
 
@@ -21,6 +29,7 @@ class ShellPolicy:
     mode: str
     allowed_prefixes: tuple[str, ...]
     blocked_prefixes: tuple[str, ...]
+    blocked_patterns: tuple[str, ...]
     max_output_bytes: int
 
 
@@ -42,8 +51,15 @@ class ShellExecutor:
         token = self._first_command_token(command)
         if not token:
             raise ValueError("Empty shell command")
+        lowered = command.lower()
         if token in {item.lower() for item in self.policy.blocked_prefixes}:
             raise ValueError(f"Blocked command prefix: {token}")
+        for pattern in self.policy.blocked_patterns:
+            needle = str(pattern or "").strip().lower()
+            if needle and needle in lowered:
+                raise ValueError(f"Blocked command pattern: {needle}")
+        if _WRITE_INTENT_PATTERN.search(command) and _SECRET_PATH_PATTERN.search(command):
+            raise ValueError("Blocked write to sensitive secret/config path")
         mode = str(self.policy.mode or "open").strip().lower()
         if mode == "open":
             return

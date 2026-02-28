@@ -363,6 +363,21 @@ class ReplBindings:
     def _coerce_single_positional(self, tool_name: str, arg: Any) -> dict[str, Any]:
         if tool_name == "normalize_merge_candidates":
             return self._coerce_merge_candidates_positional(arg)
+        if tool_name == "retrieval_build_query_terms" and isinstance(arg, ToolResultHandle):
+            concept_payload = arg.data
+            if isinstance(concept_payload, dict) and isinstance(concept_payload.get("concept"), dict):
+                concept_payload = concept_payload.get("concept")
+            return {"concept": concept_payload}
+        if tool_name == "retrieval_build_pubmed_templates":
+            if isinstance(arg, ToolResultHandle):
+                data = arg.data
+                if isinstance(data, dict):
+                    terms_obj = data.get("terms") if isinstance(data.get("terms"), dict) else data
+                    if isinstance(terms_obj.get("pubmed"), list):
+                        return {"intervention_terms": terms_obj.get("pubmed")}
+                return {"terms": data}
+            if isinstance(arg, list):
+                return {"intervention_terms": _coerce_for_payload(arg, key="intervention_terms")}
         if isinstance(arg, dict):
             return _coerce_for_payload(arg)  # type: ignore[assignment]
         if isinstance(arg, IdListHandle):
@@ -415,8 +430,89 @@ class ReplBindings:
             normalized["ids"] = normalized.pop("nct_ids")
         if tool_name == "pubmed_search" and "term" in normalized and "query" not in normalized:
             normalized["query"] = normalized.pop("term")
+        if tool_name == "clinicaltrials_search":
+            for source_key, target_key in (
+                ("query.term", "query"),
+                ("query.intr", "intervention"),
+                ("query.cond", "condition"),
+            ):
+                if source_key in normalized and target_key not in normalized:
+                    normalized[target_key] = normalized.pop(source_key)
+            query_payload = normalized.get("query")
+            if isinstance(query_payload, dict):
+                term_value = query_payload.get("term")
+                if isinstance(term_value, str) and term_value.strip():
+                    normalized["query"] = term_value.strip()
+                if "intervention" not in normalized:
+                    intr_value = query_payload.get("intr") or query_payload.get("intervention")
+                    if isinstance(intr_value, str) and intr_value.strip():
+                        normalized["intervention"] = intr_value.strip()
+                if "condition" not in normalized:
+                    cond_value = query_payload.get("cond") or query_payload.get("condition")
+                    if isinstance(cond_value, str) and cond_value.strip():
+                        normalized["condition"] = cond_value.strip()
+
+        if tool_name == "retrieval_build_query_terms":
+            concept_payload = normalized.get("concept")
+            if isinstance(concept_payload, dict) and isinstance(concept_payload.get("concept"), dict):
+                normalized["concept"] = concept_payload["concept"]
+            if "label" not in normalized and isinstance(normalized.get("concept"), dict):
+                label = str((normalized.get("concept") or {}).get("label") or "").strip()
+                if label:
+                    normalized["label"] = label
+
+        if tool_name == "retrieval_build_pubmed_templates":
+            terms_payload = normalized.get("terms")
+            if isinstance(terms_payload, dict) and isinstance(terms_payload.get("terms"), dict):
+                normalized["terms"] = terms_payload.get("terms")
+
+            intervention_terms = normalized.get("intervention_terms")
+            if isinstance(intervention_terms, dict):
+                source_terms = intervention_terms.get("terms") if isinstance(intervention_terms.get("terms"), dict) else intervention_terms
+                if isinstance(source_terms, dict):
+                    if isinstance(source_terms.get("pubmed"), list):
+                        normalized["intervention_terms"] = source_terms.get("pubmed")
+                    elif isinstance(source_terms.get("intervention"), list):
+                        normalized["intervention_terms"] = source_terms.get("intervention")
+            if "intervention_terms" not in normalized:
+                terms_obj = normalized.get("terms")
+                if isinstance(terms_obj, dict):
+                    if isinstance(terms_obj.get("pubmed"), list):
+                        normalized["intervention_terms"] = terms_obj.get("pubmed")
+                    elif isinstance(terms_obj.get("intervention"), list):
+                        normalized["intervention_terms"] = terms_obj.get("intervention")
 
         return normalized
+
+    def _tool_error_hint(self, tool_name: str, error_message: str) -> str | None:
+        lowered = str(error_message or "").lower()
+        if tool_name == "retrieval_build_query_terms" and "concept.label" in lowered:
+            return (
+                "Hint: pass concept explicitly, e.g. "
+                "`terms = retrieval_build_query_terms(concept=merged.data.get('concept'))`."
+            )
+        if tool_name == "retrieval_build_pubmed_templates" and "intervention_terms" in lowered:
+            return (
+                "Hint: pass terms/intervention terms explicitly, e.g. "
+                "`tpl = retrieval_build_pubmed_templates(terms=terms.data.get('terms'))` "
+                "then read `tpl.data['queries']`."
+            )
+        if tool_name == "clinicaltrials_search" and "provide at least one of" in lowered:
+            return (
+                "Hint: use `clinicaltrials_search(query='...', intervention='...')` "
+                "instead of nested query objects."
+            )
+        if tool_name == "normalize_merge_candidates" and "user_text" in lowered:
+            return (
+                "Hint: include `user_text='...'` or pass normalization handles where query can be inferred."
+            )
+        if tool_name == "longevity_itp_fetch_summary" and "ids" in lowered and "non-empty list" in lowered:
+            return (
+                "Hint: pass ITP summary URLs explicitly, e.g. "
+                "`longevity_itp_fetch_summary(ids=['<itp_summary_url>'])`. "
+                "Do not call this tool without ids."
+            )
+        return None
 
     def _run_tool(self, tool_name: str, payload: dict[str, Any]) -> ToolResultHandle:
         self._nested_calls += 1
@@ -447,7 +543,9 @@ class ReplBindings:
 
         if result.get("status") != "success":
             error = result.get("error") or {}
-            raise RuntimeError(f"Tool '{tool_name}' failed: {error}")
+            hint = self._tool_error_hint(tool_name, str(error.get("message") or ""))
+            suffix = f" {hint}" if hint else ""
+            raise RuntimeError(f"Tool '{tool_name}' failed: {error}.{suffix}".rstrip())
 
         output = result.get("output")
         if not isinstance(output, dict):
@@ -719,7 +817,9 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
                 "merged = normalize_merge_candidates([res], user_text='Hyperbaric oxygen therapy')",
                 "terms = retrieval_build_query_terms(concept=merged.data.get('concept'))",
                 "print(terms.preview())",
-                "pm = pubmed_search(query='\"Hyperbaric Oxygenation\" AND aging', limit=8)",
+                "templates = retrieval_build_pubmed_templates(terms=terms.data.get('terms'), outcome_terms=['aging', 'healthspan'])",
+                "queries = templates.data.get('queries', {})",
+                "pm = pubmed_search(query=queries.get('systematic_reviews', ''), limit=8)",
                 "docs = pubmed_fetch(ids=pm.ids.head(5), include_abstract=True)",
                 "print(docs.shape())",
                 "for row in docs: print(row.get('pmid'), row.get('title'))",
@@ -737,7 +837,9 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
             "shell_vs_repl": [
                 "SHELL TOOL: bash_exec(command=\"rg -n 'normalize_merge_candidates' backend/app\")",
                 "SHELL TOOL: bash_exec(command=\"sed -n '1,140p' backend/app/agent/core.py\")",
-                "SHELL TOOL: bash_exec(command=\"curl -sS https://httpbin.org/get | jq .\")",
+                "SHELL TOOL: bash_exec(command=\"curl -sS 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&retmax=3&term=metformin+aging' | jq .esearchresult.idlist\")",
+                "SHELL TOOL: bash_exec(command=\"curl -sS 'https://clinicaltrials.gov/api/v2/studies?query.term=metformin&query.intr=metformin&pageSize=3' | jq '.studies | length'\")",
+                "SHELL TOOL: bash_exec(command=\"wget -qO- 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=32333835' | jq '.result.uids'\")",
                 "REPL CODE: res = pubmed_search(query='exercise AND alzheimer', limit=5); print(res.preview())",
             ],
         }
@@ -772,6 +874,7 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
             "workspace_root": str(bindings.shell.policy.workspace_root),
             "bash_allowed_prefixes": sorted(str(item) for item in bindings.shell.policy.allowed_prefixes),
             "bash_blocked_prefixes": sorted(str(item) for item in bindings.shell.policy.blocked_prefixes),
+            "bash_blocked_patterns": sorted(str(item) for item in bindings.shell.policy.blocked_patterns),
             "can_edit_workspace_files": can_edit_workspace_files,
             "can_use_curl_wget": can_use_curl_wget,
             "execution_limits": {
@@ -812,13 +915,16 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
         "help_repl": lambda: (
             "Use repl_exec for Python wrappers/data transforms and bash_exec for shell commands.\n"
             "Use bash_exec for navigation (`rg`, `ls`, `cat`), file workflow, and vendor API calls (`curl`/`wget`).\n"
+            "Do not import internal project modules in REPL; wrappers are already available as global callables.\n"
             "Call help_tools() / help_tool('name') when unsure about wrapper signatures.\n"
             "Use help_examples('longevity') and help_examples('shell_vs_repl') for safe workflow snippets.\n"
             "Call runtime_info() for Python/workspace/tool/shell policy details.\n"
             "Use env_vars() to inspect current user-defined REPL variables (name/type/preview).\n"
             "Search tools usually take query + limit (or term + retmax aliases).\n"
             "Fetch tools usually take ids (aliases pmids/nct_ids are accepted).\n"
+            "longevity_itp_fetch_summary is strict: ids must be a non-empty list of ITP summary URLs.\n"
             "Handles expose ids.head(n), shape(), records/items/studies convenience accessors.\n"
+            "If you changed runtime code and need it active, end with a reprompt handoff to the user.\n"
             "Example:\n"
             "  res = pubmed_search(query='exercise AND alzheimer', limit=3)\n"
             "  print(res.preview())\n"
@@ -848,6 +954,7 @@ class ReplRuntime:
         workspace_root: Path,
         allowed_command_prefixes: tuple[str, ...],
         blocked_command_prefixes: tuple[str, ...],
+        blocked_command_patterns: tuple[str, ...] = (),
         shell_policy_mode: str = "open",
         max_stdout_bytes: int,
         max_wall_time_seconds: int,
@@ -933,6 +1040,7 @@ class ReplRuntime:
                 mode=self.shell_policy_mode,
                 allowed_prefixes=allowed_command_prefixes,
                 blocked_prefixes=blocked_command_prefixes,
+                blocked_patterns=blocked_command_patterns,
                 max_output_bytes=self.max_stdout_bytes,
             )
         )

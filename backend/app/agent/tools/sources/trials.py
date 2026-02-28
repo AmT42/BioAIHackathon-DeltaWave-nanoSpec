@@ -171,7 +171,14 @@ def build_trial_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSp
         return make_tool_output(
             source="clinicaltrials",
             summary=f"Retrieved {len(compact)} ClinicalTrials.gov study record(s).",
-            data={"query": query, "intervention": intervention, "condition": condition, "studies": compact},
+            data={
+                "query": query,
+                "intervention": intervention,
+                "condition": condition,
+                "studies": compact,
+                "count": len(compact),
+                "total_results": len(compact),
+            },
             ids=[item.get("nct_id") for item in compact if item.get("nct_id")],
             artifacts=artifacts,
             pagination={"next_page_token": next_page_token, "has_more": bool(next_page_token)},

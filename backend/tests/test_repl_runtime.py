@@ -10,6 +10,7 @@ from app.agent.repl.types import IdListHandle, ToolResultHandle
 from app.agent.tools.contracts import make_tool_output
 from app.agent.tools.context import ToolContext
 from app.agent.tools.builtin import create_builtin_registry
+from app.agent.tools.errors import ToolExecutionError
 from app.agent.tools.registry import ToolRegistry, ToolSpec
 
 
@@ -152,6 +153,116 @@ def _merge_registry() -> ToolRegistry:
                     "required": ["user_text"],
                 },
                 handler=normalize_merge_candidates,
+                source="test",
+            ),
+        ]
+    )
+
+
+def _coercion_registry() -> ToolRegistry:
+    def normalize_ontology(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        return make_tool_output(
+            source="test",
+            summary="ontology",
+            data={"query": payload.get("query"), "hits": [{"obo_id": "NCIT:C38065", "label": "HBOT"}]},
+            ctx=ctx,
+        )
+
+    def normalize_merge_candidates(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        return make_tool_output(
+            source="test",
+            summary="merged",
+            data={"concept": {"label": "Hyperbaric Oxygen Therapy"}, "payload": payload},
+            ctx=ctx,
+        )
+
+    def retrieval_build_query_terms(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        return make_tool_output(
+            source="test",
+            summary="terms",
+            data={"payload": payload, "terms": {"pubmed": ["Hyperbaric Oxygen Therapy"]}},
+            ctx=ctx,
+        )
+
+    def retrieval_build_pubmed_templates(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        return make_tool_output(
+            source="test",
+            summary="templates",
+            data={"payload": payload},
+            ctx=ctx,
+        )
+
+    def clinicaltrials_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        return make_tool_output(
+            source="test",
+            summary="trials",
+            data={"payload": payload},
+            ctx=ctx,
+        )
+
+    return ToolRegistry(
+        [
+            ToolSpec(
+                name="normalize_ontology",
+                description="Ontology alias",
+                input_schema={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+                handler=normalize_ontology,
+                source="test",
+            ),
+            ToolSpec(
+                name="normalize_merge_candidates",
+                description="Merge alias",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "user_text": {"type": "string"},
+                        "ontology_candidates": {"type": "object"},
+                    },
+                    "required": ["user_text"],
+                },
+                handler=normalize_merge_candidates,
+                source="test",
+            ),
+            ToolSpec(
+                name="retrieval_build_query_terms",
+                description="Build terms",
+                input_schema={
+                    "type": "object",
+                    "properties": {"concept": {"type": "object"}},
+                    "required": ["concept"],
+                },
+                handler=retrieval_build_query_terms,
+                source="test",
+            ),
+            ToolSpec(
+                name="retrieval_build_pubmed_templates",
+                description="Build templates",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "terms": {"type": "object"},
+                        "intervention_terms": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+                handler=retrieval_build_pubmed_templates,
+                source="test",
+            ),
+            ToolSpec(
+                name="clinicaltrials_search",
+                description="ClinicalTrials search",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "intervention": {"type": "string"},
+                        "condition": {"type": "string"},
+                    },
+                },
+                handler=clinicaltrials_search,
                 source="test",
             ),
         ]
@@ -306,6 +417,13 @@ def test_execute_bash_open_mode_still_blocks_hard_prefix() -> None:
         runtime.execute_bash(command="rm -f /tmp/repl_runtime_block_test", timeout_s=10)
 
 
+def test_execute_bash_blocks_sensitive_pattern_even_in_open_mode() -> None:
+    runtime = _runtime(shell_policy_mode="open", blocked_command_patterns=("git reset --hard",))
+
+    with pytest.raises(ValueError):
+        runtime.execute_bash(command="git reset --hard HEAD", timeout_s=10)
+
+
 def test_execute_bash_guarded_mode_rejects_unlisted_prefix() -> None:
     runtime = _runtime(shell_policy_mode="guarded")
 
@@ -445,6 +563,8 @@ def test_tool_result_handle_records_iteration_and_shape() -> None:
     rows = list(handle)
     assert len(rows) == 2
     assert rows[0]["pmid"] == "1"
+    assert handle.get("records")[1]["pmid"] == "2"
+    assert handle["records"][0]["pmid"] == "1"
     shape = handle.shape()
     assert shape["records_count"] == 2
 
@@ -493,9 +613,121 @@ def test_repl_runtime_info_and_help_examples_helpers_available() -> None:
             "print(len(ex['examples']) > 0)\n"
             "ex2 = help_examples('shell_vs_repl')\n"
             "print(ex2['topic'])\n"
-            "print(len(ex2['examples']) > 0)"
+            "print(len(ex2['examples']) > 0)\n"
+            "print(any('clinicaltrials.gov/api/v2/studies' in line for line in ex2['examples']))\n"
+            "print(any('eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi' in line for line in ex2['examples']))"
         ),
     )
 
     assert out.error is None
-    assert "True\nTrue\nTrue\nTrue\nlongevity\nTrue\nshell_vs_repl\nTrue" in out.stdout
+    lines = [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    assert lines[:8] == ["True", "True", "True", "True", "longevity", "True", "shell_vs_repl", "True"]
+    assert lines[8:] == ["True", "True"]
+
+
+def test_repl_coerces_query_terms_from_merge_handle() -> None:
+    runtime = _runtime_with_tools(_coercion_registry())
+
+    out = runtime.execute(
+        thread_id="thread-o",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code=(
+            "o = normalize_ontology(query='Hyperbaric oxygen therapy')\n"
+            "m = normalize_merge_candidates([o], user_text='Hyperbaric oxygen therapy')\n"
+            "t = retrieval_build_query_terms(m)\n"
+            "print(t.data['payload']['concept']['label'])"
+        ),
+    )
+
+    assert out.error is None
+    assert "Hyperbaric Oxygen Therapy" in out.stdout
+
+
+def test_repl_coerces_pubmed_templates_from_terms_handle() -> None:
+    runtime = _runtime_with_tools(_coercion_registry())
+
+    out = runtime.execute(
+        thread_id="thread-p",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code=(
+            "o = normalize_ontology(query='Hyperbaric oxygen therapy')\n"
+            "m = normalize_merge_candidates([o], user_text='Hyperbaric oxygen therapy')\n"
+            "terms = retrieval_build_query_terms(concept=m.data.get('concept'))\n"
+            "templates = retrieval_build_pubmed_templates(intervention_terms=terms)\n"
+            "print(templates.data['payload']['intervention_terms'])"
+        ),
+    )
+
+    assert out.error is None
+    assert "Hyperbaric Oxygen Therapy" in out.stdout
+
+
+def test_repl_clinicaltrials_search_flattens_nested_query_object() -> None:
+    runtime = _runtime_with_tools(_coercion_registry())
+
+    out = runtime.execute(
+        thread_id="thread-q",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code=(
+            "res = clinicaltrials_search(query={'term': 'hbot', 'intr': 'hbot'})\n"
+            "print(res.data['payload'])"
+        ),
+    )
+
+    assert out.error is None
+    assert "'query': 'hbot'" in out.stdout
+    assert "'intervention': 'hbot'" in out.stdout
+
+
+def test_repl_itp_missing_ids_surfaces_targeted_hint() -> None:
+    def longevity_itp_fetch_summary(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        ids = payload.get("ids")
+        if not isinstance(ids, list) or not ids:
+            raise ToolExecutionError(
+                code="VALIDATION_ERROR",
+                message="'ids' must be a non-empty list",
+                retryable=False,
+                details={},
+            )
+        return make_tool_output(source="test", summary="ok", data={"records": []}, ctx=ctx)
+
+    runtime = _runtime_with_tools(
+        ToolRegistry(
+            [
+                ToolSpec(
+                    name="longevity_itp_fetch_summary",
+                    description="ITP fetch",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"ids": {"type": "array", "items": {"type": "string"}}},
+                        "required": ["ids"],
+                    },
+                    handler=longevity_itp_fetch_summary,
+                    source="test",
+                )
+            ]
+        )
+    )
+
+    out = runtime.execute(
+        thread_id="thread-r",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code="longevity_itp_fetch_summary()",
+    )
+
+    assert out.error is not None
+    assert "'ids' must be a non-empty list" in out.error
+    assert "Hint:" in out.error
+    assert "longevity_itp_fetch_summary(ids=['<itp_summary_url>'])" in out.error

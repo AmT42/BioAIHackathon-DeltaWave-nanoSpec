@@ -109,7 +109,10 @@ Each `./backend/scripts/eve-up.sh` run creates:
 - Preload-only package bootstrap is configurable (`REPL_PRELOAD_*`); lazy install is disabled by default.
 - Shell policy is configurable: `REPL_SHELL_POLICY_MODE=open|guarded`.
 - Even in `open` mode, hard blocked prefixes in `REPL_BLOCKED_COMMAND_PREFIXES` are always denied.
+- Additional shell safety rails can block command substrings via `REPL_BLOCKED_COMMAND_PATTERNS` (for example destructive git patterns).
 - Runtime execution brief is injected into the system prompt each turn (tool list, shell policy/mode, limits, import policy, helpers), so the model uses the current environment contract.
+- Runtime code edits are tracked per turn (`REPL_GIT_TRACKING_ENABLED`). If runtime-sensitive files change (`REPL_RUNTIME_SENSITIVE_PATHS`), the assistant emits a reprompt-required handoff message so the next turn starts on updated code.
+- Controlled reload is available for safe turn-boundary restarts: set `REPL_CONTROLLED_RELOAD_ENABLED=true` and run via `backend/scripts/eve-up.sh` (default behavior). The backend exits with `REPL_CONTROLLED_RELOAD_EXIT_CODE` and auto-restarts in the script loop.
 - `GEMINI_REPLAY_SIGNATURE_MODE` controls replay behavior when Gemini history is missing a required leading `thought_signature` (`strict` default: downgrade that historical step to text fallback; `placeholder`: inject compatibility placeholder signature).
 - Gemini requests use Google GenAI SDK streaming with thought-signature-aware tool replay.
 - If Gemini model naming fails (404 model not found), switch `GEMINI_MODEL` to a supported model for your key/project (for example `gemini/gemini-3-pro` or `gemini/gemini-3-flash`).
