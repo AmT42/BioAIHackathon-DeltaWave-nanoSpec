@@ -370,13 +370,18 @@ class GeminiProvider(ProviderClient):
                     name="repl_exec",
                     input={
                         "code": (
+                            "try:\n"
+                            "    kg = kg_cypher_execute(cypher='MATCH (i)-[r]-(n) RETURN i,r,n LIMIT 25')\n"
+                            "    print(kg.preview())\n"
+                            "except Exception as exc:\n"
+                            "    print(f'KG unavailable/skipped: {exc}')\n"
                             f"result = pubmed_search(query={json.dumps(user_text)}, mode='precision', limit=5)\n"
                             "print(result.preview())"
                         )
                     },
                 )
             )
-            text = "I will run a quick literature search first."
+            text = "I will run KG-first expansion and then a literature search."
         else:
             text = f"Gemini mock response: {user_text or 'Ready.'}"
 

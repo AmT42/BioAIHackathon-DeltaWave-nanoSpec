@@ -66,6 +66,8 @@ _DEFAULT_DENIED_IMPORT_MODULES = {
     "signal",
     "socket",
 }
+_KG_TOOL_NAMES = {"kg_cypher_execute", "kg_query"}
+_KG_GATED_PUBMED_TOOLS = {"pubmed_search", "pubmed_esearch"}
 
 
 def _coerce_for_payload(value: Any, *, key: str | None = None) -> Any:
@@ -243,6 +245,10 @@ class ReplBindings:
         self.max_tool_calls_per_exec = max_tool_calls_per_exec
         self._hooks = _ExecutionHooks()
         self._nested_calls = 0
+        registered = {str(name).strip().lower() for name in self.tools.names()}
+        self._kg_gate_enabled = bool(registered & _KG_TOOL_NAMES)
+        self._kg_pass_executed = False
+        self._kg_unavailable = not self._kg_gate_enabled
 
     def set_execution_context(
         self,
@@ -421,6 +427,18 @@ class ReplBindings:
     def _normalize_payload(self, tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         normalized = {str(k): _coerce_for_payload(v, key=str(k)) for k, v in payload.items()}
 
+        def _first_nonempty_text(value: Any) -> str | None:
+            if isinstance(value, str):
+                text = value.strip()
+                return text or None
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, str):
+                        text = item.strip()
+                        if text:
+                            return text
+            return None
+
         # Common ergonomic aliases
         if "max_results" in normalized and "limit" not in normalized:
             normalized["limit"] = normalized.pop("max_results")
@@ -428,8 +446,34 @@ class ReplBindings:
             normalized["ids"] = normalized.pop("pmids")
         if "nct_ids" in normalized and "ids" not in normalized:
             normalized["ids"] = normalized.pop("nct_ids")
+        if "setid" in normalized and "ids" not in normalized:
+            setid_value = normalized.pop("setid")
+            if isinstance(setid_value, list):
+                normalized["ids"] = setid_value
+            elif isinstance(setid_value, str):
+                stripped = setid_value.strip()
+                if stripped:
+                    normalized["ids"] = [stripped]
         if tool_name == "pubmed_search" and "term" in normalized and "query" not in normalized:
             normalized["query"] = normalized.pop("term")
+        if tool_name == "kg_cypher_execute":
+            if "cypher" not in normalized:
+                for alias in ("query", "statement", "cypher_query", "command", "expression"):
+                    alias_value = _first_nonempty_text(normalized.get(alias))
+                    if alias_value:
+                        normalized["cypher"] = alias_value
+                        break
+            cypher_payload = normalized.get("cypher")
+            if isinstance(cypher_payload, dict):
+                nested = _first_nonempty_text(cypher_payload.get("cypher")) or _first_nonempty_text(
+                    cypher_payload.get("query")
+                )
+                if nested:
+                    normalized["cypher"] = nested
+            elif isinstance(cypher_payload, list):
+                nested = _first_nonempty_text(cypher_payload)
+                if nested:
+                    normalized["cypher"] = nested
         if tool_name == "clinicaltrials_search":
             for source_key, target_key in (
                 ("query.term", "query"),
@@ -451,6 +495,30 @@ class ReplBindings:
                     cond_value = query_payload.get("cond") or query_payload.get("condition")
                     if isinstance(cond_value, str) and cond_value.strip():
                         normalized["condition"] = cond_value.strip()
+            elif isinstance(query_payload, list):
+                list_query = _first_nonempty_text(query_payload)
+                if list_query:
+                    normalized["query"] = list_query
+
+            if "query" not in normalized:
+                clinical_terms = _first_nonempty_text(normalized.get("clinicaltrials"))
+                if clinical_terms:
+                    normalized["query"] = clinical_terms
+                else:
+                    terms_payload = normalized.get("terms")
+                    if isinstance(terms_payload, dict):
+                        inferred = _first_nonempty_text(terms_payload.get("clinicaltrials")) or _first_nonempty_text(
+                            terms_payload.get("pubmed")
+                        )
+                        if inferred:
+                            normalized["query"] = inferred
+
+            for field in ("query", "intervention", "condition"):
+                field_value = normalized.get(field)
+                if isinstance(field_value, list):
+                    inferred = _first_nonempty_text(field_value)
+                    if inferred:
+                        normalized[field] = inferred
 
         if tool_name == "retrieval_build_query_terms":
             concept_payload = normalized.get("concept")
@@ -466,6 +534,15 @@ class ReplBindings:
             if isinstance(terms_payload, dict) and isinstance(terms_payload.get("terms"), dict):
                 normalized["terms"] = terms_payload.get("terms")
 
+            terms_payload = normalized.get("terms")
+            if "intervention_terms" not in normalized:
+                if isinstance(terms_payload, list):
+                    normalized["intervention_terms"] = terms_payload
+                elif isinstance(terms_payload, str):
+                    stripped = terms_payload.strip()
+                    if stripped:
+                        normalized["intervention_terms"] = [stripped]
+
             intervention_terms = normalized.get("intervention_terms")
             if isinstance(intervention_terms, dict):
                 source_terms = intervention_terms.get("terms") if isinstance(intervention_terms.get("terms"), dict) else intervention_terms
@@ -474,6 +551,10 @@ class ReplBindings:
                         normalized["intervention_terms"] = source_terms.get("pubmed")
                     elif isinstance(source_terms.get("intervention"), list):
                         normalized["intervention_terms"] = source_terms.get("intervention")
+            elif isinstance(intervention_terms, str):
+                stripped = intervention_terms.strip()
+                if stripped:
+                    normalized["intervention_terms"] = [stripped]
             if "intervention_terms" not in normalized:
                 terms_obj = normalized.get("terms")
                 if isinstance(terms_obj, dict):
@@ -481,11 +562,21 @@ class ReplBindings:
                         normalized["intervention_terms"] = terms_obj.get("pubmed")
                     elif isinstance(terms_obj.get("intervention"), list):
                         normalized["intervention_terms"] = terms_obj.get("intervention")
+            if "intervention_terms" not in normalized:
+                top_level_terms = normalized.get("pubmed") or normalized.get("intervention") or normalized.get("query_terms")
+                if isinstance(top_level_terms, list):
+                    normalized["intervention_terms"] = top_level_terms
+                elif isinstance(top_level_terms, str):
+                    stripped = top_level_terms.strip()
+                    if stripped:
+                        normalized["intervention_terms"] = [stripped]
 
         return normalized
 
     def _tool_error_hint(self, tool_name: str, error_message: str) -> str | None:
         lowered = str(error_message or "").lower()
+        if tool_name == "kg_cypher_execute" and "cypher" in lowered and "required" in lowered:
+            return "Hint: call `kg_cypher_execute(cypher='MATCH ... RETURN ...')` (or pass `query='...'`)."
         if tool_name == "retrieval_build_query_terms" and "concept.label" in lowered:
             return (
                 "Hint: pass concept explicitly, e.g. "
@@ -515,6 +606,18 @@ class ReplBindings:
         return None
 
     def _run_tool(self, tool_name: str, payload: dict[str, Any]) -> ToolResultHandle:
+        normalized_tool_name = str(tool_name or "").strip().lower()
+        if (
+            normalized_tool_name in _KG_GATED_PUBMED_TOOLS
+            and self._kg_gate_enabled
+            and not self._kg_pass_executed
+            and not self._kg_unavailable
+        ):
+            raise RuntimeError(
+                "KG-first gate: run `kg_cypher_execute(...)` before PubMed search when KG tools are available. "
+                "If KG is unconfigured, call KG once, report that, then continue with PubMed."
+            )
+
         self._nested_calls += 1
         if self._nested_calls > self.max_tool_calls_per_exec:
             raise RuntimeError(
@@ -537,6 +640,16 @@ class ReplBindings:
                 tool_name=tool_name,
             ),
         )
+
+        if normalized_tool_name in _KG_TOOL_NAMES:
+            if result.get("status") == "success":
+                self._kg_pass_executed = True
+            else:
+                error = result.get("error")
+                error_payload = error if isinstance(error, dict) else {}
+                code = str(error_payload.get("code") or "").strip().upper()
+                if code == "UNCONFIGURED":
+                    self._kg_unavailable = True
 
         if self._hooks.on_tool_result is not None:
             self._hooks.on_tool_result(nested_call_id, tool_name, result)
@@ -817,14 +930,20 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
                 "merged = normalize_merge_candidates([res], user_text='Hyperbaric oxygen therapy')",
                 "terms = retrieval_build_query_terms(concept=merged.data.get('concept'))",
                 "print(terms.preview())",
+                "kg0 = kg_cypher_execute(cypher='MATCH (i)-[r]-(n) RETURN i,r,n LIMIT 25')",
+                "print(kg0.preview())",
                 "templates = retrieval_build_pubmed_templates(terms=terms.data.get('terms'), outcome_terms=['aging', 'healthspan'])",
                 "queries = templates.data.get('queries', {})",
                 "pm = pubmed_search(query=queries.get('systematic_reviews', ''), limit=8)",
                 "docs = pubmed_fetch(ids=pm.ids.head(5), include_abstract=True)",
                 "print(docs.shape())",
                 "for row in docs: print(row.get('pmid'), row.get('title'))",
+                "kg1 = kg_cypher_execute(cypher='MATCH (n)-[r]-(m) RETURN n,r,m LIMIT 25')",
+                "print(kg1.preview())",
             ],
             "pubmed": [
+                "kg = kg_cypher_execute(cypher='MATCH (i)-[r]-(n) RETURN i,r,n LIMIT 25')",
+                "print(kg.preview())",
                 "pm = pubmed_search(query='exercise AND alzheimer', limit=5)",
                 "docs = pubmed_fetch(ids=pm.ids.head(3), include_abstract=True)",
                 "print(docs.preview())",
@@ -840,7 +959,7 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
                 "SHELL TOOL: bash_exec(command=\"curl -sS 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&retmax=3&term=metformin+aging' | jq .esearchresult.idlist\")",
                 "SHELL TOOL: bash_exec(command=\"curl -sS 'https://clinicaltrials.gov/api/v2/studies?query.term=metformin&query.intr=metformin&pageSize=3' | jq '.studies | length'\")",
                 "SHELL TOOL: bash_exec(command=\"wget -qO- 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=32333835' | jq '.result.uids'\")",
-                "REPL CODE: res = pubmed_search(query='exercise AND alzheimer', limit=5); print(res.preview())",
+                "REPL CODE: kg = kg_cypher_execute(cypher='MATCH (i)-[r]-(n) RETURN i,r,n LIMIT 25'); res = pubmed_search(query='exercise AND alzheimer', limit=5); print(kg.preview()); print(res.preview())",
             ],
         }
         if normalized_topic not in examples:
@@ -927,6 +1046,7 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
             "Handles expose ids.head(n), shape(), records/items/studies convenience accessors.\n"
             "If you changed runtime code and need it active, end with a reprompt handoff to the user.\n"
             "Example:\n"
+            "  kg = kg_cypher_execute(cypher='MATCH (i)-[r]-(n) RETURN i,r,n LIMIT 25')\n"
             "  res = pubmed_search(query='exercise AND alzheimer', limit=3)\n"
             "  print(res.preview())\n"
             "  rows = pubmed_fetch(ids=res.ids[:3], include_abstract=True)\n"

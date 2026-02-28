@@ -52,16 +52,16 @@ export function KgGraphPanel({ graph }: KgGraphPanelProps) {
               color: "#ececf1",
               "text-outline-width": 1,
               "text-outline-color": "#0f1318",
-              "background-color": "data(color)",
-              "border-width": "mapData(score, 0, 1, 1.3, 3.8)",
-              "border-color": "data(border_color)",
+              "background-color": "data(type_color)",
+              "border-width": 1.8,
+              "border-color": "#1a232d",
             },
           },
           {
             selector: "node[is_top = 1]",
             style: {
-              "border-width": 4.8,
-              "border-color": "#ffe08c",
+              "border-width": 5.4,
+              "border-color": "#ffd84d",
             },
           },
           {
@@ -77,6 +77,13 @@ export function KgGraphPanel({ graph }: KgGraphPanelProps) {
             selector: "edge",
             style: {
               width: "data(width)",
+              label: "data(label)",
+              color: "#d7dce7",
+              "font-size": 8,
+              "text-rotation": "autorotate",
+              "text-background-color": "#0f1318",
+              "text-background-opacity": 0.86,
+              "text-background-padding": "2px",
               "line-color": "#5f6572",
               "curve-style": "bezier",
               "target-arrow-shape": "triangle",
@@ -227,21 +234,9 @@ export function KgGraphPanel({ graph }: KgGraphPanelProps) {
       </div>
 
       <div className="kg-panel__legend">
-        <div className="kg-panel__legend-line kg-panel__legend-line--importance">
-          <span className="kg-panel__legend-label">Importance</span>
-          <div className="kg-panel__gradient-wrap">
-            <span className="kg-panel__gradient" />
-            <span className="kg-panel__gradient-ticks">
-              <span>0.0</span>
-              <span>0.5</span>
-              <span>1.0</span>
-            </span>
-          </div>
-          <span className="kg-panel__legend-label">Heat + size</span>
-        </div>
         <div className="kg-panel__legend-line">
           <span className="kg-panel__top-dot" />
-          <span className="kg-panel__legend-label">Top-ranked node per type</span>
+          <span className="kg-panel__legend-label">Most important node in each type (yellow ring)</span>
         </div>
         <div className="kg-panel__types">
           {Object.entries(nodeTypeColors).map(([nodeType, color]) => (

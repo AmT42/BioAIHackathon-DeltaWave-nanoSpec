@@ -226,3 +226,68 @@ def test_projection_rows_infer_subgraph_and_node_stats() -> None:
     assert stats["summary"]["node_type_count"] >= 4
     assert any(row["node_type"] == "Target" for row in stats["by_type"])
 
+
+def test_function_projection_rows_infer_relation_type_and_labels() -> None:
+    records = [
+        {
+            "n.name": "Nicotinamide Mononucleotide",
+            "labels(n)": ["SmallMolecule", "Drug"],
+            "type(r)": "Drug_targets_protein",
+            "m.name": "Nicotinamide phosphoribosyltransferase",
+            "labels(m)": ["Protein"],
+        }
+    ]
+
+    subgraph = _build_canonical_subgraph(records)
+    assert subgraph["summary"] == {"node_count": 2, "edge_count": 1}
+    assert {row["node_type"] for row in subgraph["nodes"]} == {"Drug", "Protein"}
+    edge = subgraph["edges"][0]
+    assert edge["type"] == "Drug_targets_protein"
+
+    stats = _build_query_local_node_stats(records, top_n_per_type=5)
+    assert stats["summary"]["node_count"] == 2
+    assert stats["summary"]["edge_count"] == 1
+    assert stats["summary"]["node_type_count"] == 2
+
+
+def test_projection_rows_preserve_edge_type_from_rel_column_and_target_labels() -> None:
+    records = [
+        {
+            "compound": "Nicotinamide riboside",
+            "rel": "Disease_is_treated_by_drug",
+            "target": "heart failure",
+            "label": ["Disease"],
+        }
+    ]
+
+    subgraph = _build_canonical_subgraph(records)
+    assert subgraph["summary"] == {"node_count": 2, "edge_count": 1}
+    assert {row["node_type"] for row in subgraph["nodes"]} == {"Compound", "Disease"}
+    edge = subgraph["edges"][0]
+    assert edge["type"] == "Disease_is_treated_by_drug"
+
+    stats = _build_query_local_node_stats(records, top_n_per_type=5)
+    assert stats["summary"]["node_count"] == 2
+    assert stats["summary"]["edge_count"] == 1
+
+
+def test_suffix_projection_rows_infer_subgraph_for_n_m_r_aliases() -> None:
+    records = [
+        {
+            "n_labels": ["BiologicalProcess", "GOTerm"],
+            "n_name": "nicotinamide riboside catabolic process",
+            "r_type": "Protein_involved_in_biological_process",
+            "m_labels": ["Protein"],
+            "m_name": "Nicotinamide phosphoribosyltransferase",
+        }
+    ]
+
+    subgraph = _build_canonical_subgraph(records)
+    assert subgraph["summary"] == {"node_count": 2, "edge_count": 1}
+    assert {row["node_type"] for row in subgraph["nodes"]} == {"BiologicalProcess", "Protein"}
+    edge = subgraph["edges"][0]
+    assert edge["type"] == "Protein_involved_in_biological_process"
+
+    stats = _build_query_local_node_stats(records, top_n_per_type=5)
+    assert stats["summary"]["node_count"] == 2
+    assert stats["summary"]["edge_count"] == 1

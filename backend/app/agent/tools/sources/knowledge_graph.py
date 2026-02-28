@@ -73,14 +73,16 @@ before narrowing to one outcome domain.
 - Prefer stable RETURN aliases for flat projections (e.g., `drug_id`, `drug_name`, \
 `protein_id`, `protein_name`) instead of ambiguous bare fields like `name`.
 - Prefer connected graph rows: return node-relation-node tuples, not standalone node lists.
-- When user asks for traversal, neighborhood, or graph mapping, prefer explicit second-degree \
-connections (A->B->C) when supported by schema, and return both relationships.
+- When user asks for traversal, neighborhood, or graph mapping, start with explicit second-degree \
+connections (A->B->C) when supported by schema, then expand to deeper anchored neighborhoods (3-4 hops) as needed.
 - For 2-hop queries, include ids/names for source, bridge, and target nodes and include \
 relationship type/properties for each hop in RETURN.
+- For >=3-hop exploration, use sequential anchored queries and keep overlap nodes/edges so \
+multi-hop results remain stitchable into one connected subgraph.
 - Never fabricate disconnected components if a connected path pattern can answer the question.
 - Keep the query read-only and exploration-friendly: allow connected traversal patterns with up to 3 MATCH clauses \
 and up to 1 OPTIONAL MATCH when needed for graph enrichment.
-- Prefer explicit 1-hop and 2-hop path patterns anchored on user entities to maximize connected subgraph coverage.
+- Prefer explicit anchored multi-hop path patterns (1-hop through 4-hop across sequential queries) to maximize connected subgraph coverage.
 - Do NOT use UNION, CALL subqueries, UNWIND, APOC, or variable-length path patterns (`*`).
 - Return enough columns to reconstruct graph structure (node ids/names + per-hop relationship type/properties).
 - Keep RETURN bounded (prefer <= 24 columns) and rely on LIMIT for result size control.
@@ -801,6 +803,19 @@ _NAME_FIELD_PRIORITY: tuple[str, ...] = (
     "title",
 )
 
+_LABELS_FUNCTION_KEY_PATTERN = re.compile(r"^labels\((?P<alias>[^)]+)\)$", flags=re.IGNORECASE)
+_TYPE_FUNCTION_KEY_PATTERN = re.compile(r"^type\((?P<alias>[^)]+)\)$", flags=re.IGNORECASE)
+_SUFFIX_ALIAS_FIELD_PATTERN = re.compile(
+    r"^(?P<alias>[a-zA-Z0-9]+)_(?P<field>id|name|label|labels|type|relation|relation_type|relationship_type|edge_type)$"
+)
+_GENERIC_RELATION_TYPE_COLUMNS = {
+    "rel",
+    "relation",
+    "relation_type",
+    "relationship_type",
+    "edge_type",
+}
+
 
 def _normalize_column_token(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
@@ -872,11 +887,26 @@ def _collect_inferred_graph_values_from_flat_row(
     alias_variants: dict[str, set[str]] = {}
     alias_variant_to_alias: dict[str, str] = {}
     alias_field_values: dict[str, dict[str, Any]] = {}
+    alias_label_values: dict[str, list[str]] = {}
     relation_field_values: dict[str, dict[str, Any]] = {}
     alias_to_node_element_id: dict[str, str] = {}
     alias_to_node_wrapper: dict[str, dict[str, Any]] = {}
     alias_name_is_explicit: dict[str, bool] = {}
     alias_order: list[str] = []
+    target_label_values: list[str] = []
+    node_like_fields = {"id", *set(_NAME_FIELD_PRIORITY)}
+
+    def _as_clean_label_list(value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        out: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            clean = item.strip()
+            if clean:
+                out.append(clean)
+        return out
 
     def register_node_alias(raw_alias: str, node_id: str) -> str:
         normalized_raw_alias = _singularize_alias(raw_alias)
@@ -924,6 +954,67 @@ def _collect_inferred_graph_values_from_flat_row(
         if key.endswith("_relationship"):
             continue
 
+        labels_match = _LABELS_FUNCTION_KEY_PATTERN.fullmatch(key)
+        if labels_match:
+            raw_alias = _singularize_alias(labels_match.group("alias"))
+            canonical_alias = alias_variant_to_alias.get(raw_alias, raw_alias)
+            labels = _as_clean_label_list(raw_value)
+            if labels:
+                alias_label_values[canonical_alias] = labels
+            continue
+
+        type_match = _TYPE_FUNCTION_KEY_PATTERN.fullmatch(key)
+        if type_match:
+            raw_alias = _singularize_alias(type_match.group("alias"))
+            relation_type = str(raw_value).strip() if isinstance(raw_value, str) else ""
+            if relation_type:
+                relation_field_values.setdefault(raw_alias, {})["relationship_type"] = relation_type
+            continue
+
+        normalized_key = _normalize_column_token(key)
+        suffix_match = _SUFFIX_ALIAS_FIELD_PATTERN.fullmatch(normalized_key)
+        if suffix_match:
+            raw_alias = _singularize_alias(suffix_match.group("alias"))
+            canonical_alias = alias_variant_to_alias.get(raw_alias, raw_alias)
+            field = suffix_match.group("field")
+
+            if field == "id":
+                node_id = str(raw_value).strip() if isinstance(raw_value, str) else ""
+                if node_id:
+                    canonical_alias = register_node_alias(canonical_alias, node_id) or canonical_alias
+                    alias_field_values.setdefault(canonical_alias, {})["id"] = node_id
+                    continue
+
+            if field == "name":
+                node_name = str(raw_value).strip() if isinstance(raw_value, str) else ""
+                if node_name:
+                    alias_field_values.setdefault(canonical_alias, {})["name"] = node_name
+                    continue
+
+            if field in {"label", "labels"}:
+                labels = _as_clean_label_list(raw_value)
+                if labels:
+                    alias_label_values[canonical_alias] = labels
+                    continue
+
+            if field in {"type", "relation", "relation_type", "relationship_type", "edge_type"}:
+                relation_type = str(raw_value).strip() if isinstance(raw_value, str) else ""
+                if relation_type:
+                    relation_field_values.setdefault(canonical_alias, {})["relationship_type"] = relation_type
+                    continue
+
+        if normalized_key in {"label", "labels", "target_label", "target_labels"}:
+            labels = _as_clean_label_list(raw_value)
+            if labels:
+                target_label_values = labels
+                continue
+
+        if normalized_key in _GENERIC_RELATION_TYPE_COLUMNS:
+            relation_type = str(raw_value).strip() if isinstance(raw_value, str) else ""
+            if relation_type:
+                relation_field_values.setdefault("r", {})["relationship_type"] = relation_type
+            continue
+
         if key.endswith("_name") and isinstance(raw_value, str) and raw_value.strip():
             raw_alias = _singularize_alias(key[:-5].strip())
             canonical_alias = alias_variant_to_alias.get(raw_alias)
@@ -938,6 +1029,10 @@ def _collect_inferred_graph_values_from_flat_row(
         canonical_alias = alias_variant_to_alias.get(raw_alias)
         if canonical_alias:
             alias_field_values.setdefault(canonical_alias, {})[field] = raw_value
+            continue
+
+        if field in node_like_fields:
+            alias_field_values.setdefault(raw_alias, {})[field] = raw_value
             continue
 
         if isinstance(raw_value, dict):
@@ -964,10 +1059,11 @@ def _collect_inferred_graph_values_from_flat_row(
         element_id = f"inferred:{alias}:{node_id}"
         alias_to_node_element_id[alias] = element_id
         alias_name_is_explicit[alias] = explicit_name
+        labels = alias_label_values.get(alias) or [_label_from_alias(alias)]
         node_wrapper = {
             "__kind__": "node",
             "__element_id__": element_id,
-            "__labels__": [_label_from_alias(alias)],
+            "__labels__": labels,
             "id": node_id,
             "name": node_name,
         }
@@ -984,6 +1080,42 @@ def _collect_inferred_graph_values_from_flat_row(
     # Projection-style rows often return named columns (e.g., Drug/Target/Pathways)
     # without *_id fields. Infer node wrappers from scalar/list columns as fallback.
     if not alias_to_node_element_id:
+        for raw_alias, fields in alias_field_values.items():
+            node_id = str(fields.get("id") or "").strip()
+            if not node_id:
+                for field in _NAME_FIELD_PRIORITY:
+                    value = fields.get(field)
+                    if isinstance(value, str) and value.strip():
+                        node_id = value.strip()
+                        break
+            if not node_id:
+                continue
+
+            node_name = ""
+            for field in _NAME_FIELD_PRIORITY:
+                value = fields.get(field)
+                if isinstance(value, str) and value.strip():
+                    node_name = value.strip()
+                    break
+            if not node_name:
+                node_name = node_id
+
+            element_id = f"inferred:{raw_alias}:{node_id}"
+            if raw_alias not in alias_to_node_element_id:
+                alias_to_node_element_id[raw_alias] = element_id
+                alias_order.append(raw_alias)
+            labels = alias_label_values.get(raw_alias) or [_label_from_alias(raw_alias)]
+            node_wrapper = {
+                "__kind__": "node",
+                "__element_id__": element_id,
+                "__labels__": labels,
+                "id": node_id,
+                "name": node_name,
+            }
+            alias_to_node_wrapper[raw_alias] = node_wrapper
+            alias_name_is_explicit[raw_alias] = bool(node_name)
+            node_wrappers.append(node_wrapper)
+
         for raw_key, raw_value in row.items():
             key = str(raw_key).strip()
             if key.endswith("_relationship"):
@@ -1001,15 +1133,27 @@ def _collect_inferred_graph_values_from_flat_row(
             if alias not in alias_to_node_element_id:
                 alias_to_node_element_id[alias] = element_id
                 alias_order.append(alias)
-            node_wrappers.append(
-                {
-                    "__kind__": "node",
-                    "__element_id__": element_id,
-                    "__labels__": [_label_from_alias(alias)],
-                    "id": value,
-                    "name": value,
-                }
-            )
+            labels = alias_label_values.get(alias) or [_label_from_alias(alias)]
+            node_wrapper = {
+                "__kind__": "node",
+                "__element_id__": element_id,
+                "__labels__": labels,
+                "id": value,
+                "name": value,
+            }
+            alias_to_node_wrapper[alias] = node_wrapper
+            node_wrappers.append(node_wrapper)
+
+    if target_label_values:
+        target_alias = ""
+        for candidate in ("target", "m"):
+            if candidate in alias_to_node_wrapper:
+                target_alias = candidate
+                break
+        if not target_alias and len(alias_order) >= 2:
+            target_alias = alias_order[1]
+        if target_alias and target_alias in alias_to_node_wrapper:
+            alias_to_node_wrapper[target_alias]["__labels__"] = target_label_values
 
     aliases = set(alias_to_node_element_id.keys())
     rel_count_before = len(rel_wrappers)
@@ -1695,11 +1839,11 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
             "Translates the question into a Cypher query, validates relationship directions, "
             "and executes it against a Neo4j database. Optimized for connected node-edge-node rows "
             "that are usable for graph visualization and traversal, including graph-enrichment passes "
-            "for second-degree neighborhoods.",
+            "for second-degree and deeper neighborhoods.",
             when=[
                 "user asks about gene-disease associations, drug targets, protein interactions, pathways, or other biomedical relationships",
                 "need structured entity data from the CROssBAR knowledge graph",
-                "need connected subgraph outputs (including second-degree/2-hop paths) rather than isolated entities",
+                "need connected subgraph outputs (including 2-hop, 3-hop, and deeper anchored paths) rather than isolated entities",
                 "need richer neighborhood exploration to expand graph connectivity before downstream analysis",
             ],
             avoid=[
@@ -1707,7 +1851,7 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
                 "when the user already provides a Cypher query (use kg_cypher_execute)",
             ],
             critical_args=[
-                "question (str, required): the biomedical question in natural language; specify direct links, 2-hop traversal, or enrichment intent",
+                "question (str, required): the biomedical question in natural language; specify direct links, multi-hop traversal depth, or enrichment intent",
             ],
             returns=(
                 "record_list with cypher query used and matching connected rows from the knowledge graph "
@@ -1726,7 +1870,7 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
                     "type": "string",
                     "description": (
                         "Natural-language biomedical question to query the knowledge graph. "
-                        "If you want traversal-ready output, explicitly ask for connected or 2-hop relationships."
+                        "If you want traversal-ready output, explicitly ask for connected multi-hop relationships (for example 2-hop to 4-hop)."
                     ),
                 },
                 "top_k": {
@@ -1758,7 +1902,7 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
         description=render_tool_description(
             purpose="Execute a raw Cypher query directly against the CROssBAR Neo4j knowledge graph. "
             "Optionally validates and corrects relationship directions before execution. "
-            "Best for explicit connected path queries (including two-hop traversals and enrichment-focused neighborhood expansion).",
+            "Best for explicit connected path queries (including multi-hop traversals and enrichment-focused neighborhood expansion).",
             when=[
                 "user provides an explicit Cypher query to run",
                 "need to iteratively refine explicit Cypher traversal while inspecting returned rows",
@@ -1782,7 +1926,7 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
                     "type": "string",
                     "description": (
                         "Cypher query to execute against the CROssBAR knowledge graph. "
-                        "Prefer connected node-edge path returns (including 2-hop chains) for graph traversal use-cases."
+                        "Prefer connected node-edge path returns (including 2-hop to 4-hop chains across anchored passes) for graph traversal use-cases."
                     ),
                 },
                 "top_k": {

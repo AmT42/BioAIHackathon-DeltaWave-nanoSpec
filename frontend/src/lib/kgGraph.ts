@@ -40,13 +40,6 @@ const TYPE_COLORS = [
   "#6B8A7A",
 ];
 
-const IMPORTANCE_COLOR_STOPS = [
-  { t: 0, color: "#243b5a" },
-  { t: 0.3, color: "#2e7fb3" },
-  { t: 0.58, color: "#4fbe9d" },
-  { t: 0.8, color: "#f3b44d" },
-  { t: 1, color: "#d94b3d" },
-];
 
 export function createEmptyKgMergedGraph(): KgMergedGraph {
   return {
@@ -461,46 +454,6 @@ export function recomputeMergedImportanceStats(graph: KgMergedGraph): KgMergedGr
   };
 }
 
-function interpolateHexColor(lowHex: string, highHex: string, t: number): string {
-  const tt = clamp(t, 0, 1);
-  const low = lowHex.replace("#", "");
-  const high = highHex.replace("#", "");
-  const lr = parseInt(low.slice(0, 2), 16);
-  const lg = parseInt(low.slice(2, 4), 16);
-  const lb = parseInt(low.slice(4, 6), 16);
-  const hr = parseInt(high.slice(0, 2), 16);
-  const hg = parseInt(high.slice(2, 4), 16);
-  const hb = parseInt(high.slice(4, 6), 16);
-  const r = Math.round(lr + (hr - lr) * tt);
-  const g = Math.round(lg + (hg - lg) * tt);
-  const b = Math.round(lb + (hb - lb) * tt);
-  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
-}
-
-function interpolateByStops(
-  stops: ReadonlyArray<{ t: number; color: string }>,
-  score: number
-): string {
-  if (stops.length === 0) return "#888888";
-  if (stops.length === 1) return stops[0].color;
-  const t = clamp(score, 0, 1);
-  if (t <= stops[0].t) return stops[0].color;
-  for (let i = 1; i < stops.length; i += 1) {
-    const left = stops[i - 1];
-    const right = stops[i];
-    if (t <= right.t) {
-      const span = Math.max(right.t - left.t, 1e-9);
-      const local = clamp((t - left.t) / span, 0, 1);
-      return interpolateHexColor(left.color, right.color, local);
-    }
-  }
-  return stops[stops.length - 1].color;
-}
-
-function emphasizeImportance(score: number): number {
-  return clamp(Math.pow(clamp(score, 0, 1), 0.68), 0, 1);
-}
-
 export function buildCytoscapeElements(graph: KgMergedGraph): {
   elements: KgCytoscapeElement[];
   nodeTypeColors: Record<string, string>;
@@ -512,22 +465,18 @@ export function buildCytoscapeElements(graph: KgMergedGraph): {
 
   for (const node of nodeValues) {
     const nodeType = stableNodeType(node.node_type);
-    nodeTypeColors[nodeType] = nodeTypeColor(nodeType);
+    const typeColor = nodeTypeColor(nodeType);
+    nodeTypeColors[nodeType] = typeColor;
     const score = clamp(node.score.importance_score ?? 0, 0, 1);
-    const visualScore = emphasizeImportance(score);
-    const size = round6(22 + visualScore * 40);
-    const color = interpolateByStops(IMPORTANCE_COLOR_STOPS, visualScore);
-    const borderColor = interpolateHexColor("#1a232d", "#fff0bf", visualScore);
+    const size = 30;
     elements.push({
       data: {
         id: node.key,
         label: node.name || node.id || node.key,
         node_type: nodeType,
         score: score,
-        visual_score: visualScore,
         size: size,
-        color,
-        border_color: borderColor,
+        type_color: typeColor,
         is_top: node.score.is_top_in_type ? 1 : 0,
         rank: node.score.rank_in_type,
         pagerank: node.metrics.pagerank,
@@ -554,6 +503,7 @@ export function buildCytoscapeElements(graph: KgMergedGraph): {
         source: edge.source,
         target: edge.target,
         edge_type: edge.type,
+        label: edge.type,
         weight: round6(edge.weight),
         width: round6(1.2 + normalized * 4),
       },

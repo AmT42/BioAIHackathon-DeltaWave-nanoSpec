@@ -23,5 +23,5 @@ frontend/tsconfig.tsbuildinfo
 # OS
 .DS_Store
 
-
+evidence-navigator/
 .worktrees/

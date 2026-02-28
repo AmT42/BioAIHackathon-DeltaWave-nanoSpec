@@ -319,6 +319,64 @@ def _coercion_registry() -> ToolRegistry:
     )
 
 
+def _kg_pubmed_registry(*, kg_unconfigured: bool = False) -> ToolRegistry:
+    def kg_cypher_execute(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        if kg_unconfigured:
+            raise ToolExecutionError(
+                code="UNCONFIGURED",
+                message="Neo4j settings are not configured",
+                retryable=False,
+                details={},
+            )
+        return make_tool_output(
+            source="test",
+            summary="kg",
+            data={"payload": payload, "records": [{"node": "ok"}]},
+            ctx=ctx,
+        )
+
+    def pubmed_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        return make_tool_output(
+            source="test",
+            summary="pubmed",
+            data={"payload": payload},
+            ctx=ctx,
+        )
+
+    return ToolRegistry(
+        [
+            ToolSpec(
+                name="kg_cypher_execute",
+                description="KG cypher",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "cypher": {"type": "string"},
+                        "top_k": {"type": "integer"},
+                    },
+                    "required": ["cypher"],
+                },
+                handler=kg_cypher_execute,
+                source="test",
+            ),
+            ToolSpec(
+                name="pubmed_search",
+                description="PubMed search",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": "integer"},
+                    },
+                    "required": ["query"],
+                },
+                handler=pubmed_search,
+                source="test",
+            ),
+        ]
+    )
+
+
 def test_repl_persists_variables_per_thread() -> None:
     runtime = _runtime()
 
@@ -772,6 +830,26 @@ def test_repl_coerces_pubmed_templates_from_terms_handle() -> None:
     assert "Hyperbaric Oxygen Therapy" in out.stdout
 
 
+def test_repl_coerces_pubmed_templates_from_terms_dict_positional() -> None:
+    runtime = _runtime_with_tools(_coercion_registry())
+
+    out = runtime.execute(
+        thread_id="thread-p2",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code=(
+            "terms = {'pubmed': ['NAD+ precursors (NMN/NR)'], 'clinicaltrials': ['NAD+ precursors (NMN/NR)']}\n"
+            "templates = retrieval_build_pubmed_templates(terms)\n"
+            "print(templates.data['payload'])"
+        ),
+    )
+
+    assert out.error is None
+    assert "'intervention_terms': ['NAD+ precursors (NMN/NR)']" in out.stdout
+
+
 def test_repl_clinicaltrials_search_flattens_nested_query_object() -> None:
     runtime = _runtime_with_tools(_coercion_registry())
 
@@ -790,6 +868,137 @@ def test_repl_clinicaltrials_search_flattens_nested_query_object() -> None:
     assert out.error is None
     assert "'query': 'hbot'" in out.stdout
     assert "'intervention': 'hbot'" in out.stdout
+
+
+def test_repl_clinicaltrials_search_coerces_terms_dict_positional() -> None:
+    runtime = _runtime_with_tools(_coercion_registry())
+
+    out = runtime.execute(
+        thread_id="thread-q2",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code=(
+            "terms = {'pubmed': ['NAD+ precursors (NMN/NR)'], 'clinicaltrials': ['NAD+ precursors (NMN/NR)']}\n"
+            "res = clinicaltrials_search(terms)\n"
+            "print(res.data['payload'])"
+        ),
+    )
+
+    assert out.error is None
+    assert "'query': 'NAD+ precursors (NMN/NR)'" in out.stdout
+
+
+def test_repl_blocks_pubmed_search_until_kg_pass_runs() -> None:
+    runtime = _runtime_with_tools(_kg_pubmed_registry())
+
+    out = runtime.execute(
+        thread_id="thread-kg-gate-1",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code="pubmed_search(query='metformin aging', limit=3)",
+    )
+
+    assert out.error is not None
+    assert "KG-first gate" in out.error
+
+
+def test_repl_allows_pubmed_search_after_successful_kg_pass() -> None:
+    runtime = _runtime_with_tools(_kg_pubmed_registry())
+
+    out = runtime.execute(
+        thread_id="thread-kg-gate-2",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code=(
+            "kg = kg_cypher_execute(cypher='MATCH (n)-[r]-(m) RETURN n,r,m LIMIT 10')\n"
+            "res = pubmed_search(query='metformin aging', limit=3)\n"
+            "print(res.data['payload'])"
+        ),
+    )
+
+    assert out.error is None
+    assert "'query': 'metformin aging'" in out.stdout
+
+
+def test_repl_allows_pubmed_search_after_kg_unconfigured_failure() -> None:
+    runtime = _runtime_with_tools(_kg_pubmed_registry(kg_unconfigured=True))
+
+    first = runtime.execute(
+        thread_id="thread-kg-gate-3",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code="kg_cypher_execute(cypher='MATCH (n) RETURN n LIMIT 1')",
+    )
+
+    assert first.error is not None
+    assert "UNCONFIGURED" in first.error
+
+    second = runtime.execute(
+        thread_id="thread-kg-gate-3",
+        run_id="run-1",
+        request_index=2,
+        user_msg_index=1,
+        execution_id="repl-2",
+        code="res = pubmed_search(query='metformin aging', limit=2)\nprint(res.data['payload'])",
+    )
+
+    assert second.error is None
+    assert "'query': 'metformin aging'" in second.stdout
+
+
+def test_repl_kg_cypher_execute_maps_query_alias() -> None:
+    def kg_cypher_execute(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        return make_tool_output(
+            source="test",
+            summary="kg",
+            data={"payload": payload},
+            ctx=ctx,
+        )
+
+    runtime = _runtime_with_tools(
+        ToolRegistry(
+            [
+                ToolSpec(
+                    name="kg_cypher_execute",
+                    description="KG cypher",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "cypher": {"type": "string"},
+                            "top_k": {"type": "integer"},
+                        },
+                        "required": ["cypher"],
+                    },
+                    handler=kg_cypher_execute,
+                    source="test",
+                )
+            ]
+        )
+    )
+
+    out = runtime.execute(
+        thread_id="thread-q3",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code=(
+            "res = kg_cypher_execute(query='MATCH (n) RETURN n LIMIT 1', top_k=5)\n"
+            "print(res.data['payload'])"
+        ),
+    )
+
+    assert out.error is None
+    assert "'cypher': 'MATCH (n) RETURN n LIMIT 1'" in out.stdout
+    assert "'top_k': 5" in out.stdout
 
 
 def test_repl_itp_missing_ids_surfaces_targeted_hint() -> None:
