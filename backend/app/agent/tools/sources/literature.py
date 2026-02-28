@@ -309,7 +309,7 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
         return make_tool_output(
             source="openalex",
             summary=f"Retrieved {len(compact)} OpenAlex work(s) for query '{query}'.",
-            data={"query": query, "works": compact, "meta": meta},
+            data={"query": query, "records": compact, "works": compact, "meta": meta},
             ids=ids,
             citations=citations,
             artifacts=artifacts,
@@ -336,6 +336,36 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
             raw = str(raw_id).strip()
             if not raw:
                 continue
+            upper = raw.upper()
+            pmid_value: str | None = None
+            if upper.startswith("PMID:"):
+                pmid_candidate = raw.split(":", 1)[1].strip()
+                if pmid_candidate.isdigit():
+                    pmid_value = pmid_candidate
+            elif raw.isdigit():
+                pmid_value = raw
+
+            if pmid_value:
+                try:
+                    data, headers = http.get_json(
+                        url="https://api.openalex.org/works",
+                        params={**auth_params, "filter": f"pmid:{pmid_value}", "per-page": 1, "page": 1},
+                    )
+                    results = list((data or {}).get("results") or [])
+                    if not results:
+                        warnings.append(f"pmid:{pmid_value}: not found in OpenAlex")
+                        continue
+                    compact = _compact_openalex_record(results[0])
+                    records.append(compact)
+                    request_id = request_id or _request_id(headers)
+                    raw_ref = write_raw_json_artifact(ctx, f"openalex_work_pmid_{pmid_value}", data) if ctx else None
+                    if raw_ref:
+                        artifacts.append(raw_ref)
+                    continue
+                except ToolExecutionError as exc:
+                    warnings.append(f"pmid:{pmid_value}: {exc.message}")
+                    continue
+
             if raw.startswith("https://openalex.org/"):
                 work_id = raw.rsplit("/", 1)[-1]
             else:

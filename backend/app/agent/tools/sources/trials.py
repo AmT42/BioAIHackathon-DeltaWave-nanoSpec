@@ -183,6 +183,7 @@ def build_trial_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSp
                 "query": query,
                 "intervention": intervention,
                 "condition": condition,
+                "records": compact,
                 "studies": compact,
                 "count": len(compact),
                 "total_results": len(compact),
@@ -218,7 +219,7 @@ def build_trial_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSp
         return make_tool_output(
             source="clinicaltrials",
             summary=f"Fetched {len(records)} ClinicalTrials.gov study detail record(s).",
-            data={"studies": records, "include_raw": include_raw},
+            data={"records": records, "studies": records, "include_raw": include_raw},
             ids=[item.get("nct_id") for item in records if item.get("nct_id")],
             warnings=warnings,
             artifacts=artifacts,
@@ -357,7 +358,7 @@ def build_trial_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSp
         return make_tool_output(
             source="trial_publication_linker",
             summary=f"Linked {len(links)} trial(s) to publication evidence.",
-            data={"links": links, "evidence_age_days": evidence_age_days},
+            data={"records": links, "links": links, "evidence_age_days": evidence_age_days},
             ids=[item.get("nct_id") for item in links if item.get("nct_id")],
             warnings=warnings,
             ctx=ctx,

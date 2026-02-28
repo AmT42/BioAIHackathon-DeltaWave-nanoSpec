@@ -27,6 +27,8 @@ ToolStartCallback = Callable[[str, str, dict[str, Any]], None]
 ToolResultCallback = Callable[[str, str, dict[str, Any]], None]
 TextStreamCallback = Callable[[str], None]
 ImportCallback = Callable[[str, dict[str, Any] | None, dict[str, Any] | None, Any, int], Any]
+LlmQueryHandler = Callable[..., str]
+LlmQueryBatchHandler = Callable[..., list[dict[str, Any]]]
 
 _MINIMAL_ALLOWED_IMPORT_ROOTS = {
     "collections",
@@ -258,6 +260,10 @@ class ReplBindings:
         import_hook: ImportCallback,
         max_wall_time_seconds: int,
         max_tool_calls_per_exec: int,
+        llm_query_handler: LlmQueryHandler | None = None,
+        llm_query_batch_handler: LlmQueryBatchHandler | None = None,
+        enable_subagent_helpers: bool = False,
+        subagent_stdout_line_soft_limit: int | None = None,
     ) -> None:
         self.thread_id = thread_id
         self.tools = tools
@@ -265,6 +271,12 @@ class ReplBindings:
         self.import_hook = import_hook
         self.max_wall_time_seconds = max_wall_time_seconds
         self.max_tool_calls_per_exec = max_tool_calls_per_exec
+        self.llm_query_handler = llm_query_handler
+        self.llm_query_batch_handler = llm_query_batch_handler
+        self.enable_subagent_helpers = bool(enable_subagent_helpers)
+        self.subagent_stdout_line_soft_limit = (
+            int(subagent_stdout_line_soft_limit) if isinstance(subagent_stdout_line_soft_limit, int) else None
+        )
         self._hooks = _ExecutionHooks()
         self._nested_calls = 0
         registered = {str(name).strip().lower() for name in self.tools.names()}
@@ -294,6 +306,73 @@ class ReplBindings:
 
     def nested_call_count(self) -> int:
         return self._nested_calls
+
+    def llm_query(
+        self,
+        task: str,
+        *,
+        env: dict[str, Any] | None = None,
+        allowed_tools: list[str] | None = None,
+        custom_instruction: str | None = None,
+        allow_repl: bool = True,
+        allow_bash: bool = True,
+        max_iterations: int | None = None,
+    ) -> str:
+        if not self.enable_subagent_helpers or self.llm_query_handler is None:
+            raise RuntimeError("llm_query(...) is unavailable in this REPL runtime.")
+        task_text = str(task or "").strip()
+        if not task_text:
+            raise ValueError("llm_query requires non-empty task")
+        env_payload = env if isinstance(env, dict) else None
+        tool_payload = allowed_tools if isinstance(allowed_tools, list) else None
+        return self.llm_query_handler(
+            thread_id=self.thread_id,
+            run_id=self._hooks.run_id,
+            request_index=self._hooks.request_index,
+            user_msg_index=self._hooks.user_msg_index,
+            parent_tool_use_id=self._hooks.parent_tool_use_id,
+            task=task_text,
+            env=env_payload,
+            allowed_tools=tool_payload,
+            custom_instruction=(str(custom_instruction) if isinstance(custom_instruction, str) else None),
+            allow_repl=bool(allow_repl),
+            allow_bash=bool(allow_bash),
+            max_iterations=int(max_iterations) if isinstance(max_iterations, int) else None,
+        )
+
+    def llm_query_batch(
+        self,
+        tasks: list[str | dict[str, Any]],
+        *,
+        shared_env: dict[str, Any] | None = None,
+        allowed_tools: list[str] | None = None,
+        custom_instruction: str | None = None,
+        allow_repl: bool = True,
+        allow_bash: bool = True,
+        max_iterations: int | None = None,
+        max_workers: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if not self.enable_subagent_helpers or self.llm_query_batch_handler is None:
+            raise RuntimeError("llm_query_batch(...) is unavailable in this REPL runtime.")
+        if not isinstance(tasks, list) or not tasks:
+            raise ValueError("llm_query_batch requires a non-empty tasks list")
+        env_payload = shared_env if isinstance(shared_env, dict) else None
+        tool_payload = allowed_tools if isinstance(allowed_tools, list) else None
+        return self.llm_query_batch_handler(
+            thread_id=self.thread_id,
+            run_id=self._hooks.run_id,
+            request_index=self._hooks.request_index,
+            user_msg_index=self._hooks.user_msg_index,
+            parent_tool_use_id=self._hooks.parent_tool_use_id,
+            tasks=tasks,
+            shared_env=env_payload,
+            allowed_tools=tool_payload,
+            custom_instruction=(str(custom_instruction) if isinstance(custom_instruction, str) else None),
+            allow_repl=bool(allow_repl),
+            allow_bash=bool(allow_bash),
+            max_iterations=int(max_iterations) if isinstance(max_iterations, int) else None,
+            max_workers=int(max_workers) if isinstance(max_workers, int) else None,
+        )
 
     def _tool_properties(self, tool_name: str) -> dict[str, Any]:
         spec = self.tools.get_spec(tool_name)
@@ -391,6 +470,25 @@ class ReplBindings:
     def _coerce_single_positional(self, tool_name: str, arg: Any) -> dict[str, Any]:
         if tool_name == "normalize_merge_candidates":
             return self._coerce_merge_candidates_positional(arg)
+        if tool_name in {"evidence_classify_pubmed_records", "evidence_classify_trial_records"}:
+            if isinstance(arg, ToolResultHandle):
+                return {"records": arg.records or arg.items or arg.studies}
+            if isinstance(arg, list):
+                return {"records": _coerce_for_payload(arg, key="records")}
+        if tool_name == "evidence_build_ledger":
+            if isinstance(arg, ToolResultHandle):
+                return {"pubmed_records": arg.records or arg.items or arg.studies}
+            if isinstance(arg, list):
+                return {"pubmed_records": _coerce_for_payload(arg, key="pubmed_records")}
+        if tool_name in {"evidence_grade", "evidence_gap_map", "evidence_render_report"}:
+            if isinstance(arg, ToolResultHandle):
+                data = arg.data
+                if isinstance(data, dict):
+                    return {"ledger": data}
+                if isinstance(data, list):
+                    return {"ledger": {"records": data}}
+            if isinstance(arg, list):
+                return {"ledger": {"records": _coerce_for_payload(arg, key="records")}}
         if tool_name == "retrieval_build_query_terms" and isinstance(arg, ToolResultHandle):
             concept_payload = arg.data
             if isinstance(concept_payload, dict) and isinstance(concept_payload.get("concept"), dict):
@@ -601,6 +699,39 @@ class ReplBindings:
                         normalized["query"] = value.strip()
                         break
 
+        if tool_name in {"evidence_classify_pubmed_records", "evidence_classify_trial_records"}:
+            if "records" not in normalized:
+                for alias in ("studies", "items", "classified_records"):
+                    candidate = normalized.get(alias)
+                    if isinstance(candidate, list):
+                        normalized["records"] = candidate
+                        break
+
+        if tool_name == "evidence_build_ledger":
+            if "pubmed_records" not in normalized:
+                for alias in ("records", "classified_records"):
+                    candidate = normalized.get(alias)
+                    if isinstance(candidate, list):
+                        normalized["pubmed_records"] = candidate
+                        break
+            if "trial_records" not in normalized:
+                for alias in ("trials", "studies"):
+                    candidate = normalized.get(alias)
+                    if isinstance(candidate, list):
+                        normalized["trial_records"] = candidate
+                        break
+
+        if tool_name in {"evidence_grade", "evidence_gap_map", "evidence_render_report"}:
+            ledger_payload = normalized.get("ledger")
+            if isinstance(ledger_payload, list):
+                normalized["ledger"] = {"records": ledger_payload}
+            if "ledger" not in normalized:
+                for alias in ("records", "classified_records", "studies", "items"):
+                    candidate = normalized.get(alias)
+                    if isinstance(candidate, list):
+                        normalized["ledger"] = {"records": candidate}
+                        break
+
         return normalized
 
     def _tool_error_hint(self, tool_name: str, error_message: str) -> str | None:
@@ -616,6 +747,7 @@ class ReplBindings:
             return (
                 "Hint: pass terms/intervention terms explicitly, e.g. "
                 "`tpl = retrieval_build_pubmed_templates(terms=terms.data.get('terms'))` "
+                "or `tpl = retrieval_build_pubmed_templates(intervention_terms=['metformin'])`; "
                 "then read `tpl.data['queries']`."
             )
         if tool_name == "clinicaltrials_search" and "provide at least one of" in lowered:
@@ -796,6 +928,10 @@ class ReplSessionManager:
         import_hook: ImportCallback,
         max_wall_time_seconds: int,
         max_tool_calls_per_exec: int,
+        llm_query_handler: LlmQueryHandler | None = None,
+        llm_query_batch_handler: LlmQueryBatchHandler | None = None,
+        enable_subagent_helpers: bool = False,
+        subagent_stdout_line_soft_limit: int | None = None,
     ) -> ReplSessionState:
         with self._lock:
             self._cleanup()
@@ -812,6 +948,10 @@ class ReplSessionManager:
                 import_hook=import_hook,
                 max_wall_time_seconds=max_wall_time_seconds,
                 max_tool_calls_per_exec=max_tool_calls_per_exec,
+                llm_query_handler=llm_query_handler,
+                llm_query_batch_handler=llm_query_batch_handler,
+                enable_subagent_helpers=enable_subagent_helpers,
+                subagent_stdout_line_soft_limit=subagent_stdout_line_soft_limit,
             )
             globals_map = _build_base_globals(bindings)
             baseline_names = set(globals_map.keys())
@@ -1007,6 +1147,17 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
                 "SHELL TOOL: bash_exec(command=\"wget -qO- 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=32333835' | jq '.result.uids'\")",
                 "REPL CODE: kg = kg_cypher_execute(cypher='MATCH (i)-[r]-(n) RETURN i,r,n LIMIT 25'); res = pubmed_search(query='exercise AND alzheimer', limit=5); print(kg.preview()); print(res.preview())",
             ],
+            "subagents": [
+                "ids = pubmed_search(query='metformin aging', limit=20).ids",
+                "summary = llm_query('Use env ids to inspect strongest RCT signal with citations.', env={'ids': ids}, allowed_tools=['pubmed_fetch', 'evidence_classify_pubmed_records'])",
+                "print(summary)",
+                "tasks = [",
+                "  {'task': 'Find strongest human evidence for metformin in aging', 'allowed_tools': ['pubmed_search', 'pubmed_fetch']},",
+                "  {'task': 'Find ongoing CT.gov aging trials for metformin', 'allowed_tools': ['clinicaltrials_search', 'clinicaltrials_fetch']},",
+                "]",
+                "batch = llm_query_batch(tasks, max_workers=2)",
+                "for row in batch: print(row['ok'], row['trace_path'])",
+            ],
         }
         if normalized_topic not in examples:
             normalized_topic = "longevity"
@@ -1033,7 +1184,7 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
         can_use_curl_wget = (
             (mode == "open" or "curl" in allowed) and "curl" not in blocked
         ) or ((mode == "open" or "wget" in allowed) and "wget" not in blocked)
-        return {
+        info = {
             "python_version": sys.version.split(" ", 1)[0],
             "shell_policy_mode": mode,
             "workspace_root": str(bindings.shell.policy.workspace_root),
@@ -1058,6 +1209,48 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
                 "runtime_info",
             ],
         }
+        if bindings.enable_subagent_helpers:
+            info["helpers"].extend(["llm_query", "llm_query_batch"])
+            info["subagent_limits"] = {
+                "stdout_line_soft_limit": bindings.subagent_stdout_line_soft_limit,
+            }
+        return info
+
+    def _help_repl_text() -> str:
+        text = (
+            "Use repl_exec for Python wrappers/data transforms and bash_exec for shell commands.\n"
+            "Use bash_exec for navigation (`rg`, `ls`, `cat`), file workflow, and vendor API calls (`curl`/`wget`).\n"
+            "Important: bash_exec is a top-level tool call, not a Python function inside repl_exec blocks.\n"
+            "Do not import internal project modules in REPL; wrappers are already available as global callables.\n"
+            "Call help_tools() / help_tool('name') when unsure about wrapper signatures.\n"
+            "Use help_examples('longevity') and help_examples('shell_vs_repl') for safe workflow snippets.\n"
+            "Call runtime_info() for Python/workspace/tool/shell policy details.\n"
+            "Call installed_packages(limit=200) on first turn to inspect Python packages in this runtime.\n"
+            "Use env_vars() to inspect current user-defined REPL variables (name/type/preview).\n"
+            "Search tools usually take query + limit (or term + retmax aliases).\n"
+            "Fetch tools usually take ids (aliases pmids/nct_ids are accepted).\n"
+            "longevity_itp_fetch_summary is strict: ids must be a non-empty list of ITP summary URLs.\n"
+            "Handles expose ids.head(n), shape(), records/items/studies convenience accessors.\n"
+            "When chaining uncertain tools, run in small steps: one call -> print(preview/shape) -> next call.\n"
+            "Use handle-safe counts (len(res.ids) or res.shape()); avoid ad-hoc attrs like ids_count.\n"
+            "For retrieval_build_pubmed_templates use either terms=terms.data.get('terms') "
+            "(dict) or intervention_terms=[...] (plain strings).\n"
+        )
+        if bindings.enable_subagent_helpers:
+            text += (
+                "Use llm_query(...) / llm_query_batch(...) for sub-agent fan-out exploration. "
+                f"Sub-agent REPL line cap is {bindings.subagent_stdout_line_soft_limit} chars.\n"
+            )
+        text += (
+            "If you changed runtime code and need it active, end with a reprompt handoff to the user.\n"
+            "Example:\n"
+            "  res = pubmed_search(query='exercise AND alzheimer', limit=3)\n"
+            "  print(res.preview())\n"
+            "  rows = pubmed_fetch(ids=res.ids[:3], include_abstract=True)\n"
+            "  print(rows.shape())\n"
+            "  for rec in rows: print(rec.get('pmid'))"
+        )
+        return text
 
     def _installed_packages(limit: int = 200, prefix: str | None = None) -> dict[str, Any]:
         max_items = max(1, min(int(limit), 1000))
@@ -1102,31 +1295,13 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
         ),
         "env_vars": _env_vars,
         "runtime_info": _runtime_info,
-        "help_repl": lambda: (
-            "Use repl_exec for Python wrappers/data transforms and bash_exec for shell commands.\n"
-            "Use bash_exec for navigation (`rg`, `ls`, `cat`), file workflow, and vendor API calls (`curl`/`wget`).\n"
-            "Important: bash_exec is a top-level tool call, not a Python function inside repl_exec blocks.\n"
-            "Do not import internal project modules in REPL; wrappers are already available as global callables.\n"
-            "Call help_tools() / help_tool('name') when unsure about wrapper signatures.\n"
-            "Use help_examples('longevity') and help_examples('shell_vs_repl') for safe workflow snippets.\n"
-            "Call runtime_info() for Python/workspace/tool/shell policy details.\n"
-            "Call installed_packages(limit=200) on first turn to inspect Python packages in this runtime.\n"
-            "Use env_vars() to inspect current user-defined REPL variables (name/type/preview).\n"
-            "Do not import from agent.tools.*; wrappers are already available as top-level functions.\n"
-            "Search tools usually take query + limit (or term + retmax aliases).\n"
-            "Fetch tools usually take ids (aliases pmids/nct_ids are accepted).\n"
-            "longevity_itp_fetch_summary is strict: ids must be a non-empty list of ITP summary URLs.\n"
-            "Handles expose ids.head(n), shape(), records/items/studies convenience accessors.\n"
-            "If you changed runtime code and need it active, end with a reprompt handoff to the user.\n"
-            "Example:\n"
-            "  kg = kg_cypher_execute(cypher='MATCH (i)-[r]-(n) RETURN i,r,n LIMIT 25')\n"
-            "  res = pubmed_search(query='exercise AND alzheimer', limit=3)\n"
-            "  print(res.preview())\n"
-            "  rows = pubmed_fetch(ids=res.ids[:3], include_abstract=True)\n"
-            "  print(rows.shape())\n"
-            "  for rec in rows: print(rec.get('pmid'))"
-        ),
+        "help_repl": _help_repl_text,
     }
+
+    if bindings.enable_subagent_helpers and bindings.llm_query_handler is not None:
+        globals_map["llm_query"] = bindings.llm_query
+    if bindings.enable_subagent_helpers and bindings.llm_query_batch_handler is not None:
+        globals_map["llm_query_batch"] = bindings.llm_query_batch
 
     tool_ns = _ToolNamespace()
     for tool_name in sorted(bindings.tools.names()):
@@ -1175,6 +1350,10 @@ class ReplRuntime:
         lazy_install_allowlist: tuple[str, ...] = (),
         lazy_install_timeout_seconds: int = 60,
         lazy_install_index_url: str | None = None,
+        enable_subagent_helpers: bool = False,
+        llm_query_handler: LlmQueryHandler | None = None,
+        llm_query_batch_handler: LlmQueryBatchHandler | None = None,
+        subagent_stdout_line_soft_limit: int | None = None,
     ) -> None:
         self.tools = tools
         self.workspace_root = Path(workspace_root).resolve()
@@ -1231,6 +1410,14 @@ class ReplRuntime:
         self.lazy_install_timeout_seconds = max(5, int(lazy_install_timeout_seconds))
         self.lazy_install_index_url = (
             str(lazy_install_index_url).strip() if isinstance(lazy_install_index_url, str) and lazy_install_index_url.strip() else None
+        )
+        self.enable_subagent_helpers = bool(enable_subagent_helpers)
+        self.llm_query_handler = llm_query_handler
+        self.llm_query_batch_handler = llm_query_batch_handler
+        self.subagent_stdout_line_soft_limit = (
+            int(subagent_stdout_line_soft_limit)
+            if isinstance(subagent_stdout_line_soft_limit, int)
+            else None
         )
         self._lazy_install_lock = threading.Lock()
         self._lazy_install_success: set[str] = set()
@@ -1399,6 +1586,31 @@ class ReplRuntime:
             on_stderr_chunk=on_stderr_chunk,
         )
 
+    def seed_session_variables(self, *, thread_id: str, values: dict[str, Any]) -> list[str]:
+        if not values:
+            return []
+        session = self.session_manager.get_or_create(
+            thread_id=thread_id,
+            tools=self.tools,
+            shell=self.shell,
+            import_hook=self._import_hook,
+            max_wall_time_seconds=self.max_wall_time_seconds,
+            max_tool_calls_per_exec=self.max_tool_calls_per_exec,
+            llm_query_handler=self.llm_query_handler,
+            llm_query_batch_handler=self.llm_query_batch_handler,
+            enable_subagent_helpers=self.enable_subagent_helpers,
+            subagent_stdout_line_soft_limit=self.subagent_stdout_line_soft_limit,
+        )
+        seeded: list[str] = []
+        for raw_name, raw_value in values.items():
+            name = str(raw_name or "").strip()
+            if not name or name.startswith("_") or not name.isidentifier():
+                continue
+            session.globals[name] = raw_value
+            seeded.append(name)
+        session.updated_at = time.time()
+        return seeded
+
     def _truncate(self, text: str) -> tuple[str, bool]:
         encoded = text.encode("utf-8", errors="replace")
         if len(encoded) <= self.max_stdout_bytes:
@@ -1557,6 +1769,10 @@ class ReplRuntime:
             import_hook=self._import_hook,
             max_wall_time_seconds=self.max_wall_time_seconds,
             max_tool_calls_per_exec=self.max_tool_calls_per_exec,
+            llm_query_handler=self.llm_query_handler,
+            llm_query_batch_handler=self.llm_query_batch_handler,
+            enable_subagent_helpers=self.enable_subagent_helpers,
+            subagent_stdout_line_soft_limit=self.subagent_stdout_line_soft_limit,
         )
         assert session.bindings is not None
         session.globals["env_vars"] = lambda: self._snapshot_scope(session)
@@ -1602,7 +1818,8 @@ class ReplRuntime:
                     "REPL executed successfully but produced no visible output. "
                     "Your code includes print(...), but those print statements may not have run "
                     "(for example, empty loops or filters). "
-                    "Try printing counts first, e.g. print(result.shape()) or print(len(result.records))."
+                    "Try printing counts first, e.g. print(result.shape()) or print(len(result.records)). "
+                    "If you iterated over result.records/items/studies, also print result.preview() and result.warnings."
                 )
             else:
                 raw_stdout = (

@@ -418,6 +418,23 @@ def test_repl_tool_wrapper_returns_handle() -> None:
     assert "2" in out.stdout
 
 
+def test_repl_tool_result_handle_counter_aliases() -> None:
+    runtime = _runtime()
+
+    out = runtime.execute(
+        thread_id="thread-b-alias",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code="papers = fetch_paper_stub(topic='aging')\nprint(papers.ids_count)\nprint(len(papers.ids))",
+    )
+
+    assert out.error is None
+    lines = [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    assert lines[:2] == ["2", "2"]
+
+
 def test_repl_warns_when_no_print_output() -> None:
     runtime = _runtime()
 
@@ -830,6 +847,48 @@ def test_tool_result_handle_supports_candidates_and_attribute_access() -> None:
     assert handle.records[0]["rxcui"] == "123"
 
 
+def test_tool_result_handle_records_falls_back_to_studies() -> None:
+    handle = ToolResultHandle(
+        tool_name="clinicaltrials_fetch",
+        payload={
+            "summary": "ok",
+            "ids": ["NCT00000001"],
+            "data": {"studies": [{"nct_id": "NCT00000001"}]},
+        },
+        raw_result={"status": "success"},
+    )
+    assert len(handle.records) == 1
+    assert handle.records[0]["nct_id"] == "NCT00000001"
+    assert len(handle.items) == 1
+    assert len(handle.studies) == 1
+
+
+def test_tool_result_handle_records_falls_back_to_works_and_entries() -> None:
+    works_handle = ToolResultHandle(
+        tool_name="openalex_search",
+        payload={
+            "summary": "ok",
+            "ids": ["https://openalex.org/W1"],
+            "data": {"works": [{"id": "https://openalex.org/W1"}]},
+        },
+        raw_result={"status": "success"},
+    )
+    assert len(works_handle.records) == 1
+    assert works_handle.records[0]["id"] == "https://openalex.org/W1"
+
+    entries_handle = ToolResultHandle(
+        tool_name="longevity_drugage_query",
+        payload={
+            "summary": "ok",
+            "ids": ["12345"],
+            "data": {"entries": [{"compound_name": "metformin"}]},
+        },
+        raw_result={"status": "success"},
+    )
+    assert len(entries_handle.records) == 1
+    assert entries_handle.records[0]["compound_name"] == "metformin"
+
+
 def test_repl_merge_candidates_accepts_positional_handle_list() -> None:
     runtime = _runtime_with_tools(_merge_registry())
 
@@ -934,6 +993,26 @@ def test_repl_runtime_info_and_help_examples_helpers_available() -> None:
     assert lines[9:] == ["True", "True"]
 
 
+def test_repl_help_examples_subagents_uses_valid_evidence_tool_name() -> None:
+    runtime = _runtime()
+    out = runtime.execute(
+        thread_id="thread-n3",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code=(
+            "ex = help_examples('subagents')\n"
+            "joined = '\\n'.join(ex['examples'])\n"
+            "print('evidence_classify_pubmed_records' in joined)\n"
+            "print('evidence_classify_studies' in joined)"
+        ),
+    )
+    assert out.error is None
+    lines = [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    assert lines == ["True", "False"]
+
+
 def test_repl_installed_packages_helper_returns_items() -> None:
     runtime = _runtime()
 
@@ -954,6 +1033,60 @@ def test_repl_installed_packages_helper_returns_items() -> None:
 
     assert out.error is None
     assert "True\nTrue\nTrue\nTrue" in out.stdout
+
+
+def test_repl_exposes_llm_query_helpers_when_enabled() -> None:
+    captured: dict[str, Any] = {}
+
+    def _llm_query_handler(**kwargs: Any) -> str:
+        captured["single"] = kwargs
+        return "sub-ok"
+
+    def _llm_query_batch_handler(**kwargs: Any) -> list[dict[str, Any]]:
+        captured["batch"] = kwargs
+        return [
+            {
+                "ok": True,
+                "task": "a",
+                "text": "batch-ok",
+                "error": None,
+                "trace_path": "/tmp/trace.json",
+                "tool_calls": 0,
+                "iterations": 1,
+            }
+        ]
+
+    runtime = _runtime(
+        enable_subagent_helpers=True,
+        llm_query_handler=_llm_query_handler,
+        llm_query_batch_handler=_llm_query_batch_handler,
+        subagent_stdout_line_soft_limit=20_000,
+    )
+
+    out = runtime.execute(
+        thread_id="thread-sub-q",
+        run_id="run-1",
+        request_index=9,
+        user_msg_index=4,
+        execution_id="repl-1",
+        code=(
+            "print(llm_query('inspect', env={'ids':[1,2]}, allowed_tools=['calc']))\n"
+            "rows = llm_query_batch(['a'])\n"
+            "print(rows[0]['ok'])"
+        ),
+    )
+
+    assert out.error is None
+    assert "sub-ok" in out.stdout
+    assert "True" in out.stdout
+    assert captured["single"]["thread_id"] == "thread-sub-q"
+    assert captured["single"]["run_id"] == "run-1"
+    assert captured["single"]["request_index"] == 9
+    assert captured["single"]["user_msg_index"] == 4
+    assert captured["single"]["task"] == "inspect"
+    assert captured["single"]["env"] == {"ids": [1, 2]}
+    assert captured["single"]["allowed_tools"] == ["calc"]
+    assert captured["batch"]["tasks"] == ["a"]
 
 
 def test_repl_coerces_query_terms_from_merge_handle() -> None:

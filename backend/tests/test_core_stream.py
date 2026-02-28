@@ -8,6 +8,7 @@ import pytest
 from app.agent import core as core_module
 from app.agent.core import AgentCore
 from app.agent.tools.builtin import create_builtin_registry
+from app.agent.tools.science_registry import create_science_registry
 from app.agent.types import ProviderStreamResult, ToolCall
 from app.config import get_settings
 from app.persistence.db import SessionLocal, init_db
@@ -15,10 +16,23 @@ from app.persistence.models import MessageRole
 from app.persistence.service import ChatStore
 
 
+def test_core_evidence_request_heuristic() -> None:
+    assert core_module._looks_like_evidence_report_request("hyperbaric oxygen therapy for longevity") is True
+    assert core_module._looks_like_evidence_report_request("rapamycin") is True
+    assert core_module._looks_like_evidence_report_request("hello") is False
+    assert core_module._looks_like_evidence_report_request("fix runtime prompt bug") is False
+
+
 @pytest.mark.asyncio
 async def test_core_uses_runtime_system_prompt_for_messages_and_provider_call() -> None:
     await init_db()
-    settings = replace(get_settings(), mock_llm=True, gemini_api_key=None, gemini_model="gemini/gemini-3-flash")
+    settings = replace(
+        get_settings(),
+        mock_llm=True,
+        gemini_api_key=None,
+        gemini_model="gemini/gemini-3-flash",
+        repl_subagent_enabled=True,
+    )
 
     class _CaptureProvider:
         def __init__(self) -> None:
@@ -59,6 +73,8 @@ async def test_core_uses_runtime_system_prompt_for_messages_and_provider_call() 
     system_prompt = str(first_call.get("system_prompt") or "")
     assert "Runtime Environment Brief" in system_prompt
     assert "installed_packages(limit=200)" in system_prompt
+    assert "llm_query(" in system_prompt
+    assert "sub-agent REPL stdout line cap" in system_prompt
     messages = first_call.get("messages")
     assert isinstance(messages, list) and messages
     first_message = messages[0] if isinstance(messages[0], dict) else {}
@@ -244,3 +260,81 @@ async def test_core_emits_reprompt_required_when_runtime_code_changes(monkeypatc
         metadata = assistant_messages[-1].message_metadata or {}
         assert metadata.get("reprompt_required") is True
         assert metadata.get("runtime_code_updated") is True
+
+
+@pytest.mark.asyncio
+async def test_core_evidence_guardrail_requires_render_before_finalize() -> None:
+    await init_db()
+    settings = replace(get_settings(), mock_llm=True, gemini_api_key=None, gemini_model="gemini/gemini-3-flash")
+
+    class _EvidenceGuardProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self._id_prefix = uuid.uuid4().hex[:8]
+
+        def stream_turn(self, **_kwargs: object) -> ProviderStreamResult:
+            self.calls += 1
+            if self.calls == 1:
+                return ProviderStreamResult(
+                    text="Draft narrative without deterministic render.",
+                    thinking="first pass",
+                    tool_calls=[],
+                    provider_state={"provider": "gemini", "mock": True},
+                )
+            if self.calls == 2:
+                code = (
+                    "ledger = evidence_build_ledger(records=[])\n"
+                    "grade = evidence_grade(ledger=ledger.data)\n"
+                    "gap = evidence_gap_map(ledger=ledger.data, grade=grade.data)\n"
+                    "report = evidence_render_report(intervention={'label': 'HBOT'}, ledger=ledger.data, grade=grade.data, gap_map=gap.data)\n"
+                    "print(report.data.get('report_markdown'))"
+                )
+                return ProviderStreamResult(
+                    text="",
+                    thinking="run deterministic evidence tools",
+                    tool_calls=[
+                        ToolCall(
+                            id=f"tool_guard_{self._id_prefix}_{self.calls}",
+                            name="repl_exec",
+                            input={"code": code},
+                        )
+                    ],
+                    provider_state={"provider": "gemini", "mock": True},
+                )
+            return ProviderStreamResult(
+                text="Structured evidence report delivered.",
+                thinking="done",
+                tool_calls=[],
+                provider_state={"provider": "gemini", "mock": True},
+            )
+
+    async with SessionLocal() as session:
+        store = ChatStore(session)
+        thread = await store.create_thread()
+        core = AgentCore(settings=settings, store=store, tools=create_science_registry(settings))
+        provider = _EvidenceGuardProvider()
+        core._providers["gemini"] = provider  # type: ignore[assignment]
+
+        events: list[dict] = []
+
+        async def emit(event: dict) -> None:
+            events.append(event)
+
+        result = await core.run_turn_stream(
+            thread_id=thread.id,
+            provider="gemini",
+            user_message="hyperbaric oxygen therapy for longevity evidence report",
+            emit=emit,
+            max_iterations=5,
+        )
+
+        assert provider.calls == 3
+        assert "Guardrail warning" not in str(result["content"] or "")
+
+        messages = await store.get_thread_messages(thread.id, skip=0, limit=200)
+        assistant_messages = [msg for msg in messages if msg.role == MessageRole.ASSISTANT]
+        assert assistant_messages
+        metadata = assistant_messages[-1].message_metadata or {}
+        assert metadata.get("structured_evidence_required") is True
+        assert metadata.get("structured_report_rendered") is True
+        assert int(metadata.get("evidence_guard_retries") or 0) >= 1

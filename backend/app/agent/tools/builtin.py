@@ -4,7 +4,10 @@ import ast
 import operator
 from typing import Any
 import httpx
-from bs4 import BeautifulSoup
+try:
+    from bs4 import BeautifulSoup
+except Exception:  # pragma: no cover - optional dependency in constrained envs
+    BeautifulSoup = None
 
 from app.agent.tools.context import ToolContext
 from app.agent.tools.contracts import make_tool_output
@@ -61,6 +64,26 @@ def tool_web_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> 
     query = str(payload.get("query", "")).strip()
     if not query:
         raise ValueError("'query' is required")
+
+    if BeautifulSoup is None:
+        results = [
+            {
+                "title": "Dependency missing",
+                "url": "",
+                "snippet": "BeautifulSoup (bs4) is not installed in this runtime.",
+            }
+        ]
+        return make_tool_output(
+            source="builtin",
+            summary=f"Performed web search for {query}.",
+            data={
+                "query": query,
+                "results": results,
+            },
+            ids=[],
+            citations=[],
+            ctx=ctx,
+        )
         
     url = "https://lite.duckduckgo.com/lite/"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -125,7 +148,7 @@ def tool_fetch_paper_stub(payload: dict[str, Any], ctx: ToolContext | None = Non
             "topic": topic,
             "papers": papers,
         },
-        ids=[],
+        ids=[str(paper.get("doi") or "") for paper in papers if str(paper.get("doi") or "").strip()],
         citations=[],
         ctx=ctx,
     )

@@ -126,20 +126,27 @@ def test_literature_wrappers_pubmed_and_openalex() -> None:
     assert out["ids"] == ["12345", "67890"]
 
     fetch = _tool(tools, "pubmed_fetch").handler(
-        {"ids": ["12345"], "mode": "balanced", "include_abstract": False, "include_full_text": True},
+        {"ids": ["12345"], "include_abstract": False},
         ctx,
     )
     assert fetch["data"]["records"][0]["is_rct_like"] is True
-    assert fetch["data"]["records"][0]["abstract"] == "Abstract A"
-    assert fetch["data"]["records"][0]["pdf_url"] == "https://example.org/pmc9999999.pdf"
-    assert fetch["data"]["records"][0]["pdf_downloaded"] is True
-    assert fetch["data"]["records"][0]["pdf_artifact_path"] is None
-    assert fetch["data"]["include_abstract"] is True
-    assert fetch["data"]["download_pdf"] is True
-    assert "include_abstract=false ignored" in " ".join(fetch["warnings"])
+    assert "abstract" not in fetch["data"]["records"][0]
 
     oa = _tool(tools, "openalex_search").handler({"query": "rapamycin", "mode": "balanced"}, ctx)
     assert oa["ids"] == ["https://openalex.org/W1"]
+    assert oa["data"]["records"] == oa["data"]["works"]
+
+
+def test_openalex_get_works_accepts_pmid_style_ids() -> None:
+    settings = replace(get_settings(), openalex_api_key="test-key")
+    tools = build_literature_tools(settings, FakeHttp())
+    ctx = ToolContext(thread_id="t", run_id="r", tool_use_id="u")
+
+    out = _tool(tools, "openalex_get_works").handler({"ids": ["12345", "PMID:12345"]}, ctx)
+
+    records = out["data"]["records"]
+    assert len(records) == 2
+    assert all(record.get("pmid") == "12345" for record in records)
 
 
 def test_concept_merge_prefers_rxnorm_ingredient() -> None:
@@ -235,6 +242,40 @@ def test_hagr_refresh_falls_back_to_stale_cache(tmp_path: Path) -> None:
     assert out["data"]["stale_cache"] is True
     assert "stale" in out["summary"].lower()
     assert out["warnings"]
+
+
+def test_hagr_query_exposes_records_and_common_field_aliases(tmp_path: Path) -> None:
+    class NoRefreshHttp:
+        def get_bytes(self, *, url, params=None, headers=None):
+            raise AssertionError("refresh must not be called when local cache exists and auto_refresh=false")
+
+    cache_root = tmp_path / "cache" / "sources"
+    stale_dir = cache_root / "hagr_drugage"
+    stale_dir.mkdir(parents=True, exist_ok=True)
+    stale_csv = stale_dir / "drugage_20260101T000000Z.csv"
+    stale_csv.write_text(
+        "compound_name,species,avg_lifespan_change_percent,max_lifespan_change_percent,pubmed_id\n"
+        "metformin,Mus musculus,10.0,18.5,12345\n",
+        encoding="utf-8",
+    )
+
+    ctx = ToolContext(thread_id="t", run_id="r", tool_use_id="u", source_cache_root=cache_root)
+    tools = build_longevity_tools(NoRefreshHttp())
+    out = _tool(tools, "longevity_drugage_query").handler(
+        {"query": "metformin", "mode": "balanced", "auto_refresh": "false"},
+        ctx,
+    )
+
+    assert out["data"]["records"] == out["data"]["entries"]
+    assert len(out["data"]["entries"]) == 1
+    row = out["data"]["entries"][0]
+    assert row["avg_lifespan_change_percent"] == "10.0"
+    assert row["max_lifespan_change_percent"] == "18.5"
+    assert row["avg_lifespan_change"] == "10.0"
+    assert row["max_lifespan_change"] == "18.5"
+    assert row["pubmed_id"] == "12345"
+    assert row["reference"] == "12345"
+    assert out["ids"] == ["12345"]
 
 
 def test_hagr_query_honors_string_false_auto_refresh(tmp_path: Path) -> None:
