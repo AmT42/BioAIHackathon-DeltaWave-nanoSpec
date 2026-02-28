@@ -265,6 +265,10 @@ function parseTraceToSteps(message: HydratedMessage): { assistantText: string; s
         const output = asRecord(resultPayload?.output);
         const stdout = appendChunk(existing?.stdout, typeof output?.stdout === "string" ? output.stdout : undefined);
         const stderr = appendChunk(existing?.stderr, typeof output?.stderr === "string" ? output.stderr : undefined);
+        const replEnv =
+          toolName === "repl_exec"
+            ? asRecord(output?.env) ?? existing?.replEnv
+            : existing?.replEnv;
         const command =
           toolName === "bash_exec"
             ? typeof output?.command === "string"
@@ -289,6 +293,7 @@ function parseTraceToSteps(message: HydratedMessage): { assistantText: string; s
           stdout,
           stderr,
           result: resultPayload ?? undefined,
+          replEnv,
         });
         continue;
       }
@@ -303,6 +308,31 @@ function parseTraceToSteps(message: HydratedMessage): { assistantText: string; s
         segmentIndex,
         toolUseId,
         toolName: existing?.toolName,
+      });
+    }
+
+    if (blockType === "repl_env") {
+      const toolUseId = String(block.tool_use_id ?? `repl-env-${message.id}-${segmentIndex}`);
+      const targetStepId = toolIndex.get(toolUseId) ?? `hist-tool-${toolUseId}`;
+      const existing = steps.find((step) => step.id === targetStepId);
+      const envPayload = asRecord(block.env);
+      if (!envPayload) {
+        index += 1;
+        continue;
+      }
+      steps = upsertWorkStep(steps, {
+        id: targetStepId,
+        kind: "repl",
+        text: existing?.text ?? "Running Python REPL",
+        status: existing?.status ?? "done",
+        segmentIndex,
+        toolUseId,
+        toolName: "repl_exec",
+        code: existing?.code,
+        stdout: existing?.stdout,
+        stderr: existing?.stderr,
+        result: existing?.result,
+        replEnv: envPayload,
       });
     }
 
@@ -594,6 +624,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         code,
         stdout: "",
         stderr: "",
+        replEnv: undefined,
       });
       target.status = "streaming";
       nextTurns[ensured.index] = target;
@@ -620,6 +651,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         code: appendChunk(existing?.code, token),
         stdout: existing?.stdout ?? "",
         stderr: existing?.stderr ?? "",
+        replEnv: existing?.replEnv,
       });
       nextTurns[ensured.index] = target;
       return { ...baseState, turns: nextTurns };
@@ -644,6 +676,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         code: existing?.code,
         stdout: appendChunk(existing?.stdout, content),
         stderr: existing?.stderr ?? "",
+        replEnv: existing?.replEnv,
       });
       nextTurns[ensured.index] = target;
       return { ...baseState, turns: nextTurns };
@@ -668,6 +701,34 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         code: existing?.code,
         stdout: existing?.stdout ?? "",
         stderr: appendChunk(existing?.stderr, content),
+        replEnv: existing?.replEnv,
+      });
+      nextTurns[ensured.index] = target;
+      return { ...baseState, turns: nextTurns };
+    }
+
+    case "main_agent_repl_env": {
+      const ensured = ensureTurn(baseState.turns, runId);
+      const nextTurns = [...ensured.turns];
+      const target = nextTurns[ensured.index];
+      const toolUseId = event.tool_use_id ?? `repl-${runId ?? "norun"}-${event.segment_index ?? 0}`;
+      const stepId = `repl-${toolUseId}`;
+      const existing = target.workSteps.find((step) => step.id === stepId);
+      const envPayload = asRecord(event.env);
+      if (!envPayload) return baseState;
+      target.workSteps = upsertWorkStep(target.workSteps, {
+        id: stepId,
+        kind: "repl",
+        text: existing?.text ?? "Running Python REPL",
+        status: existing?.status ?? "streaming",
+        segmentIndex: event.segment_index,
+        toolUseId,
+        toolName: "repl_exec",
+        code: existing?.code,
+        stdout: existing?.stdout ?? "",
+        stderr: existing?.stderr ?? "",
+        result: existing?.result,
+        replEnv: envPayload,
       });
       nextTurns[ensured.index] = target;
       return { ...baseState, turns: nextTurns };
@@ -683,6 +744,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const resultPayload = event.result ?? {};
       const nextStatus = resultPayload.status === "error" ? "error" : "done";
       const output = asRecord(resultPayload.output);
+      const replEnv = asRecord(output?.env) ?? existing?.replEnv;
       target.workSteps = upsertWorkStep(target.workSteps, {
         id: stepId,
         kind: "repl",
@@ -695,6 +757,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         stdout: appendChunk(existing?.stdout, typeof output?.stdout === "string" ? output.stdout : undefined),
         stderr: appendChunk(existing?.stderr, typeof output?.stderr === "string" ? output.stderr : undefined),
         result: resultPayload,
+        replEnv,
       });
       nextTurns[ensured.index] = target;
       return { ...baseState, turns: nextTurns };

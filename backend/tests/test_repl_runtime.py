@@ -10,7 +10,7 @@ from app.agent.tools.builtin import create_builtin_registry
 from app.agent.tools.registry import ToolRegistry, ToolSpec
 
 
-def _runtime() -> ReplRuntime:
+def _runtime(**overrides: Any) -> ReplRuntime:
     return ReplRuntime(
         tools=create_builtin_registry(),
         workspace_root=Path("."),
@@ -20,6 +20,7 @@ def _runtime() -> ReplRuntime:
         max_wall_time_seconds=30,
         max_tool_calls_per_exec=50,
         session_manager=ReplSessionManager(max_sessions=10, session_ttl_seconds=3600),
+        **overrides,
     )
 
 
@@ -266,3 +267,63 @@ def test_repl_help_tool_exposes_schema_hints() -> None:
     assert out.error is None
     assert "'name': 'demo_search'" in out.stdout
     assert "'required_args': ['query']" in out.stdout
+
+
+def test_repl_broad_import_policy_allows_urllib_request() -> None:
+    runtime = _runtime(import_policy="broad")
+
+    out = runtime.execute(
+        thread_id="thread-j",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code="import urllib.request\nprint('ok')",
+    )
+
+    assert out.error is None
+    assert "ok" in out.stdout
+
+
+def test_repl_minimal_import_policy_blocks_urllib_request() -> None:
+    runtime = _runtime(import_policy="minimal")
+
+    out = runtime.execute(
+        thread_id="thread-k",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code="import urllib.request",
+    )
+
+    assert out.error is not None
+    assert "blocked in REPL" in out.stderr
+
+
+def test_repl_env_snapshot_debug_mode_on_error() -> None:
+    runtime = _runtime(
+        env_snapshot_mode="debug",
+        env_snapshot_max_items=20,
+        env_snapshot_max_preview_chars=80,
+        env_snapshot_redact_keys=("token",),
+    )
+
+    out = runtime.execute(
+        thread_id="thread-l",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code="api_token = 'secret-123'\nres = 42\nraise ValueError('boom')",
+    )
+
+    assert out.error is not None
+    assert out.env_snapshot is not None
+    after = out.env_snapshot.get("after") if isinstance(out.env_snapshot, dict) else {}
+    items = after.get("items") if isinstance(after, dict) else []
+    assert isinstance(items, list)
+    names = {str(item.get("name")): item for item in items if isinstance(item, dict)}
+    assert "res" in names
+    assert "api_token" in names
+    assert names["api_token"].get("preview") == "[REDACTED]"

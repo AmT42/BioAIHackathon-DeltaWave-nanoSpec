@@ -51,6 +51,25 @@ class _BashProviderSingle:
         )
 
 
+class _ReplProviderSingleCode:
+    def __init__(self, code: str) -> None:
+        self.code = code
+
+    def stream_turn(self, **_kwargs: object) -> ProviderStreamResult:
+        return ProviderStreamResult(
+            text="",
+            thinking="planning",
+            tool_calls=[
+                ToolCall(
+                    id=f"repl_call_{uuid.uuid4().hex[:8]}",
+                    name="repl_exec",
+                    input={"code": self.code},
+                )
+            ],
+            provider_state={"provider": "gemini", "mock": True},
+        )
+
+
 @pytest.mark.asyncio
 async def test_repl_state_persists_across_turns() -> None:
     await init_db()
@@ -141,3 +160,45 @@ async def test_bash_exec_runs_as_provider_tool() -> None:
     output = result_payload.get("output") if isinstance(result_payload.get("output"), dict) else {}
     assert output.get("command") == "pwd"
     assert output.get("returncode") == 0
+
+
+@pytest.mark.asyncio
+async def test_repl_env_event_emitted_on_error_in_debug_mode() -> None:
+    await init_db()
+    settings = replace(
+        get_settings(),
+        mock_llm=True,
+        gemini_api_key=None,
+        gemini_model="gemini/gemini-3-flash",
+        repl_env_snapshot_mode="debug",
+    )
+
+    async with SessionLocal() as session:
+        store = ChatStore(session)
+        thread = await store.create_thread()
+
+    provider = _ReplProviderSingleCode("x = 1\nraise RuntimeError('boom')")
+
+    async with SessionLocal() as run_session:
+        store = ChatStore(run_session)
+        core = AgentCore(settings=settings, store=store, tools=create_builtin_registry())
+        core._providers["gemini"] = provider  # type: ignore[assignment]
+
+        events: list[dict] = []
+
+        async def emit(event: dict) -> None:
+            events.append(event)
+
+        await core.run_turn_stream(
+            thread_id=thread.id,
+            provider="gemini",
+            user_message="trigger repl error",
+            emit=emit,
+            max_iterations=1,
+        )
+
+    repl_env_events = [evt for evt in events if evt.get("type") == "main_agent_repl_env"]
+    assert repl_env_events
+    payload = repl_env_events[-1].get("env")
+    assert isinstance(payload, dict)
+    assert isinstance(payload.get("after"), dict)

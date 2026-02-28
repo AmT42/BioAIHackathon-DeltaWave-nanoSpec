@@ -144,6 +144,16 @@ class AgentCore:
             max_wall_time_seconds=settings.repl_max_wall_time_seconds,
             max_tool_calls_per_exec=settings.repl_max_tool_calls_per_exec,
             session_manager=_get_repl_session_manager(settings),
+            env_snapshot_mode=settings.repl_env_snapshot_mode,
+            env_snapshot_max_items=settings.repl_env_snapshot_max_items,
+            env_snapshot_max_preview_chars=settings.repl_env_snapshot_max_preview_chars,
+            env_snapshot_redact_keys=settings.repl_env_snapshot_redact_keys,
+            import_policy=settings.repl_import_policy,
+            import_allow_modules=settings.repl_import_allow_modules,
+            lazy_install_enabled=settings.repl_lazy_install_enabled,
+            lazy_install_allowlist=settings.repl_lazy_install_allowlist,
+            lazy_install_timeout_seconds=settings.repl_lazy_install_timeout_seconds,
+            lazy_install_index_url=settings.repl_lazy_install_index_url,
         )
         self._providers = {
             "gemini": GeminiProvider(
@@ -765,6 +775,26 @@ class AgentCore:
                                     "segment_index": tool_segment,
                                     "tool_use_id": tc.id,
                                     "content": repl_result.stderr,
+                                }
+                            )
+                        if repl_result is not None and isinstance(repl_result.env_snapshot, dict):
+                            await emit(
+                                {
+                                    "type": "main_agent_repl_env",
+                                    "thread_id": thread_id,
+                                    "run_id": run_id,
+                                    "segment_index": tool_segment,
+                                    "tool_use_id": tc.id,
+                                    "env": repl_result.env_snapshot,
+                                }
+                            )
+                            collected_blocks.append(
+                                {
+                                    "type": "repl_env",
+                                    "tool_use_id": tc.id,
+                                    "env": repl_result.env_snapshot,
+                                    "segment_index": tool_segment,
+                                    "ui_visible": True,
                                 }
                             )
                         await emit(

@@ -13,6 +13,7 @@ export type WsEventType =
   | "main_agent_repl_code_token"
   | "main_agent_repl_stdout"
   | "main_agent_repl_stderr"
+  | "main_agent_repl_env"
   | "main_agent_repl_end"
   | "main_agent_bash_command_token"
   | "main_agent_complete"
@@ -44,6 +45,7 @@ export type WsEvent = {
   arguments?: Record<string, unknown>;
   code?: string;
   result?: Record<string, unknown>;
+  env?: Record<string, unknown>;
   error?: string;
 };
 
@@ -61,6 +63,7 @@ export type WorkStep = {
   stdout?: string;
   stderr?: string;
   result?: Record<string, unknown>;
+  replEnv?: Record<string, unknown>;
 };
 
 export type Turn = {

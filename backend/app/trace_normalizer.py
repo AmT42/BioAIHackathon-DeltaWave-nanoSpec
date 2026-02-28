@@ -93,6 +93,20 @@ def build_trace_v1(
                 if tool_use_id:
                     tool_use_index.setdefault(str(tool_use_id), segment_index)
             normalized.append(out)
+            continue
+
+        if block_type == "repl_env":
+            tool_use_id = block.get("tool_use_id") or block.get("tool_call_id")
+            out = {
+                "type": "repl_env",
+                "tool_use_id": tool_use_id,
+                "env": block.get("env"),
+            }
+            if isinstance(block.get("ui_visible"), bool):
+                out["ui_visible"] = block.get("ui_visible")
+            if isinstance(segment_index, int):
+                out["segment_index"] = segment_index
+            normalized.append(out)
 
     if not normalized:
         return None

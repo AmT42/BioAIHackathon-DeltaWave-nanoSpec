@@ -20,6 +20,7 @@ EventType = Literal[
     "main_agent_repl_code_token",
     "main_agent_repl_stdout",
     "main_agent_repl_stderr",
+    "main_agent_repl_env",
     "main_agent_repl_end",
     "main_agent_bash_command_token",
     "main_agent_complete",
@@ -46,4 +47,5 @@ class WsEvent(BaseModel):
     arguments: dict[str, Any] | None = None
     code: str | None = None
     result: dict[str, Any] | None = None
+    env: dict[str, Any] | None = None
     error: str | None = None

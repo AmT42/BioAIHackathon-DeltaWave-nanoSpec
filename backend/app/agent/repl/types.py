@@ -119,6 +119,7 @@ class ReplExecutionResult:
     truncated: bool
     had_visible_output: bool
     error: str | None = None
+    env_snapshot: dict[str, Any] | None = None
 
     def to_tool_output(self) -> dict[str, Any]:
         summary = "REPL execution completed."
@@ -137,6 +138,7 @@ class ReplExecutionResult:
                 "nested_tool_calls": self.nested_tool_calls,
                 "truncated": self.truncated,
                 "had_visible_output": self.had_visible_output,
+                "env": self.env_snapshot,
             },
             "error": {"message": self.error} if self.error else None,
         }

@@ -73,7 +73,8 @@ Open `http://localhost:3000` (or `3001` if changed).
 - `main_agent_thinking_start` / `main_agent_thinking_token` / `main_agent_thinking_end` / `main_agent_thinking_title`
 - `main_agent_segment_start` / `main_agent_segment_token` / `main_agent_segment_end`
 - `main_agent_tool_start` / `main_agent_tool_result`
-- `main_agent_repl_start` / `main_agent_repl_stdout` / `main_agent_repl_stderr` / `main_agent_repl_end`
+- `main_agent_repl_start` / `main_agent_repl_code_token` / `main_agent_repl_stdout` / `main_agent_repl_stderr` / `main_agent_repl_env` / `main_agent_repl_end`
+- `main_agent_bash_command_token`
 - `main_agent_complete`
 - `main_agent_error`
 
@@ -99,7 +100,9 @@ Each `./backend/scripts/eve-up.sh` run creates:
   - `repl_exec` for Python (thread-persistent variables; only printed REPL output is visible).
   - `bash_exec` for guarded shell commands.
 - REPL is wrapper-first: use `pubmed_search/pubmed_fetch/...` for retrieval, not `urllib`/`curl`.
-- In REPL, use `help_tools()`, `help_tool("name")`, and `help_repl()` for quick signature guidance.
+- In REPL, use `help_tools()`, `help_tool("name")`, `help_repl()`, and `env_vars()` for quick guidance/debugging.
+- REPL env snapshots are configurable (`REPL_ENV_SNAPSHOT_*`) and stream as `main_agent_repl_env` events (default `debug`: only on REPL errors).
+- Import behavior is configurable (`REPL_IMPORT_POLICY`, `REPL_IMPORT_ALLOW_MODULES`) with optional lazy pip install (`REPL_LAZY_INSTALL_*`).
 - `GEMINI_REPLAY_SIGNATURE_MODE` controls replay behavior when Gemini history is missing a required leading `thought_signature` (`strict` default: downgrade that historical step to text fallback; `placeholder`: inject compatibility placeholder signature).
 - Gemini requests use Google GenAI SDK streaming with thought-signature-aware tool replay.
 - If Gemini model naming fails (404 model not found), switch `GEMINI_MODEL` to a supported model for your key/project (for example `gemini/gemini-3-pro` or `gemini/gemini-3-flash`).

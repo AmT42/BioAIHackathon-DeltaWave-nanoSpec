@@ -61,6 +61,16 @@ class Settings:
     repl_max_sessions: int
     repl_allowed_command_prefixes: tuple[str, ...]
     repl_blocked_command_prefixes: tuple[str, ...]
+    repl_env_snapshot_mode: str
+    repl_env_snapshot_max_items: int
+    repl_env_snapshot_max_preview_chars: int
+    repl_env_snapshot_redact_keys: tuple[str, ...]
+    repl_import_policy: str
+    repl_import_allow_modules: tuple[str, ...]
+    repl_lazy_install_enabled: bool
+    repl_lazy_install_allowlist: tuple[str, ...]
+    repl_lazy_install_timeout_seconds: int
+    repl_lazy_install_index_url: str | None
 
 
 def _normalize_reasoning_effort(value: str | None) -> str:
@@ -109,6 +119,20 @@ def _normalize_agent_execution_mode(value: str | None) -> str:
     return "repl_only"
 
 
+def _normalize_repl_env_snapshot_mode(value: str | None) -> str:
+    normalized = (value or "debug").strip().lower()
+    if normalized in {"off", "debug", "always"}:
+        return normalized
+    return "debug"
+
+
+def _normalize_repl_import_policy(value: str | None) -> str:
+    normalized = (value or "broad").strip().lower()
+    if normalized in {"minimal", "broad"}:
+        return normalized
+    return "broad"
+
+
 def get_settings() -> Settings:
     _load_env_file()
     backend_root = Path(__file__).resolve().parents[1]
@@ -127,6 +151,13 @@ def get_settings() -> Settings:
     blocked_prefixes = _env_csv(
         "REPL_BLOCKED_COMMAND_PREFIXES",
         "rm,shutdown,reboot,mkfs,dd,sudo,ssh,scp,nc,nmap,chmod,chown",
+    )
+    repl_env_snapshot_mode = _normalize_repl_env_snapshot_mode(os.getenv("REPL_ENV_SNAPSHOT_MODE", "debug"))
+    repl_import_policy = _normalize_repl_import_policy(os.getenv("REPL_IMPORT_POLICY", "broad"))
+    repl_import_allow_modules = _env_csv("REPL_IMPORT_ALLOW_MODULES", "")
+    repl_lazy_install_allowlist = _env_csv(
+        "REPL_LAZY_INSTALL_ALLOWLIST",
+        "requests,httpx,aiohttp,pandas,numpy,scipy",
     )
 
     return Settings(
@@ -170,4 +201,17 @@ def get_settings() -> Settings:
         repl_max_sessions=int(_env_int("REPL_MAX_SESSIONS", default=500) or 500),
         repl_allowed_command_prefixes=allowed_prefixes,
         repl_blocked_command_prefixes=blocked_prefixes,
+        repl_env_snapshot_mode=repl_env_snapshot_mode,
+        repl_env_snapshot_max_items=int(_env_int("REPL_ENV_SNAPSHOT_MAX_ITEMS", default=80) or 80),
+        repl_env_snapshot_max_preview_chars=int(_env_int("REPL_ENV_SNAPSHOT_MAX_PREVIEW_CHARS", default=160) or 160),
+        repl_env_snapshot_redact_keys=_env_csv(
+            "REPL_ENV_SNAPSHOT_REDACT_KEYS",
+            "api_key,token,secret,password,auth,cookie",
+        ),
+        repl_import_policy=repl_import_policy,
+        repl_import_allow_modules=repl_import_allow_modules,
+        repl_lazy_install_enabled=_env_bool("REPL_LAZY_INSTALL_ENABLED", default=True),
+        repl_lazy_install_allowlist=repl_lazy_install_allowlist,
+        repl_lazy_install_timeout_seconds=int(_env_int("REPL_LAZY_INSTALL_TIMEOUT_SECONDS", default=60) or 60),
+        repl_lazy_install_index_url=os.getenv("REPL_LAZY_INSTALL_INDEX_URL"),
     )
