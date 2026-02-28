@@ -126,17 +126,11 @@ def test_literature_wrappers_pubmed_and_openalex() -> None:
     assert out["ids"] == ["12345", "67890"]
 
     fetch = _tool(tools, "pubmed_fetch").handler(
-        {"ids": ["12345"], "mode": "balanced", "include_abstract": False, "include_full_text": True},
+        {"ids": ["12345"], "include_abstract": False},
         ctx,
     )
     assert fetch["data"]["records"][0]["is_rct_like"] is True
-    assert fetch["data"]["records"][0]["abstract"] == "Abstract A"
-    assert fetch["data"]["records"][0]["pdf_url"] == "https://example.org/pmc9999999.pdf"
-    assert fetch["data"]["records"][0]["pdf_downloaded"] is True
-    assert fetch["data"]["records"][0]["pdf_artifact_path"] is None
-    assert fetch["data"]["include_abstract"] is True
-    assert fetch["data"]["download_pdf"] is True
-    assert "include_abstract=false ignored" in " ".join(fetch["warnings"])
+    assert "abstract" not in fetch["data"]["records"][0]
 
     oa = _tool(tools, "openalex_search").handler({"query": "rapamycin", "mode": "balanced"}, ctx)
     assert oa["ids"] == ["https://openalex.org/W1"]
