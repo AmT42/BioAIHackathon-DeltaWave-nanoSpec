@@ -31,6 +31,7 @@ class Settings:
     gemini_reasoning_effort: str
     gemini_include_thoughts: bool
     gemini_thinking_budget: int | None
+    gemini_replay_signature_mode: str
     mock_llm: bool
     artifacts_root: Path
     source_cache_root: Path
@@ -56,6 +57,13 @@ def _normalize_reasoning_effort(value: str | None) -> str:
     if normalized in allowed:
         return normalized
     return "low"
+
+
+def _normalize_replay_signature_mode(value: str | None) -> str:
+    normalized = (value or "strict").strip().lower()
+    if normalized in {"strict", "placeholder"}:
+        return normalized
+    return "strict"
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -93,6 +101,9 @@ def get_settings() -> Settings:
         gemini_reasoning_effort=_normalize_reasoning_effort(os.getenv("GEMINI_REASONING_EFFORT", "medium")),
         gemini_include_thoughts=_env_bool("GEMINI_INCLUDE_THOUGHTS", default=True),
         gemini_thinking_budget=_env_int("GEMINI_THINKING_BUDGET"),
+        gemini_replay_signature_mode=_normalize_replay_signature_mode(
+            os.getenv("GEMINI_REPLAY_SIGNATURE_MODE", "strict")
+        ),
         mock_llm=_env_bool("MOCK_LLM", default=False),
         artifacts_root=artifacts_root,
         source_cache_root=source_cache_root,

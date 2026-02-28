@@ -61,6 +61,7 @@ class AgentCore:
                 reasoning_effort=settings.gemini_reasoning_effort,
                 include_thoughts=settings.gemini_include_thoughts,
                 thinking_budget=settings.gemini_thinking_budget,
+                replay_signature_mode=settings.gemini_replay_signature_mode,
                 mock_mode=settings.mock_llm,
             ),
         }

@@ -94,5 +94,6 @@ Each `./backend/scripts/eve-up.sh` run creates:
 - `GEMINI_REASONING_EFFORT` controls Gemini thinking effort (`minimal|low|medium|high|disable|none`), default `medium`.
 - `GEMINI_INCLUDE_THOUGHTS=true` enables thought-summary streaming to the frontend.
 - Optional `GEMINI_THINKING_BUDGET` overrides the per-turn thinking token budget.
+- `GEMINI_REPLAY_SIGNATURE_MODE` controls replay behavior when Gemini history is missing a required leading `thought_signature` (`strict` default: downgrade that historical step to text fallback; `placeholder`: inject compatibility placeholder signature).
 - Gemini requests use Google GenAI SDK streaming with thought-signature-aware tool replay.
 - If Gemini model naming fails (404 model not found), switch `GEMINI_MODEL` to a supported model for your key/project (for example `gemini/gemini-3-pro` or `gemini/gemini-3-flash`).
