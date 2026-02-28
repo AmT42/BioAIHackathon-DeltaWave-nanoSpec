@@ -191,11 +191,14 @@ class AgentCore:
         self.repl_runtime = ReplRuntime(
             tools=tools,
             workspace_root=settings.repl_workspace_root,
+            artifact_root=settings.artifacts_root,
             allowed_command_prefixes=settings.repl_allowed_command_prefixes,
             blocked_command_prefixes=settings.repl_blocked_command_prefixes,
             blocked_command_patterns=settings.repl_blocked_command_patterns,
             shell_policy_mode=settings.repl_shell_policy_mode,
             max_stdout_bytes=settings.repl_max_stdout_bytes,
+            stdout_soft_line_limit=settings.repl_stdout_line_soft_limit,
+            stdout_max_line_artifacts=settings.repl_stdout_max_line_artifacts,
             max_wall_time_seconds=settings.repl_max_wall_time_seconds,
             max_tool_calls_per_exec=settings.repl_max_tool_calls_per_exec,
             session_manager=_get_repl_session_manager(settings),
@@ -233,11 +236,13 @@ class AgentCore:
         blocked_patterns = ", ".join(sorted(self.settings.repl_blocked_command_patterns))
         helpers = (
             "`help_repl()`, `help_tools()`, `help_tool('name')`, "
-            "`help_examples('longevity')`, `help_examples('shell_vs_repl')`, `runtime_info()`, `env_vars()`"
+            "`help_examples('longevity')`, `help_examples('shell_vs_repl')`, `installed_packages()`, "
+            "`runtime_info()`, `env_vars()`"
         )
         runtime_addendum = (
             "\n\n## Runtime Environment Brief (authoritative)\n"
             "- Execution model: `repl_exec` for Python wrappers, `bash_exec` for shell.\n"
+            "- `bash_exec` is a top-level tool call and is not callable from inside Python REPL blocks.\n"
             "- Use wrappers first for supported biomedical retrieval; use custom shell/API calls when wrappers are missing.\n"
             "- Shell routing guide:\n"
             "  - codebase navigation/inspection/editing and CLI workflows -> `bash_exec`\n"
@@ -247,8 +252,13 @@ class AgentCore:
             f"  {tool_list}\n"
             "- REPL helper functions available at runtime:\n"
             f"  {helpers}\n"
+            "- First-turn package discovery:\n"
+            "  - `print(installed_packages(limit=200))` to inspect Python packages available in this runtime.\n"
             "- Result handle ergonomics:\n"
             "  `res.ids.head(n)`, `res.shape()`, `res.records`, `for rec in res: ...`\n"
+            "- REPL stdout capping behavior:\n"
+            "  - very long printed lines are capped in visible stdout and full content is written to `repl_stdout` artifacts.\n"
+            "  - capped-line notes include artifact path plus `bash_exec` inspect hints (`sed`/`rg`).\n"
             "- Tool-specific validation reminder:\n"
             "  - `longevity_itp_fetch_summary` requires `ids` as a non-empty list of ITP summary URLs.\n"
             "  - if you do not have ITP URLs, skip this tool instead of calling it empty.\n"
@@ -262,6 +272,8 @@ class AgentCore:
             f"- REPL preload mode: enabled={self.settings.repl_preload_enabled}, profile=`{self.settings.repl_preload_profile}`\n"
             f"- Execution limits: max_wall={self.settings.repl_max_wall_time_seconds}s, "
             f"max_stdout={self.settings.repl_max_stdout_bytes} bytes, "
+            f"stdout_line_soft_limit={self.settings.repl_stdout_line_soft_limit} chars, "
+            f"stdout_max_line_artifacts={self.settings.repl_stdout_max_line_artifacts}, "
             f"max_tool_calls_per_exec={self.settings.repl_max_tool_calls_per_exec}\n"
             "- Bash examples:\n"
             "  - `bash_exec(command=\"rg -n 'normalize_merge_candidates' backend/app\")`\n"

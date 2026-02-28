@@ -75,6 +75,9 @@ def _compact_trial(study: dict[str, Any], *, include_raw: bool = False) -> dict[
     primary_completion_date = (status_module.get("primaryCompletionDateStruct") or {}).get("date")
 
     nct_id = ident.get("nctId") or study.get("nctId")
+    overall_status = status_module.get("overallStatus")
+    brief_title = ident.get("briefTitle")
+    official_title = ident.get("officialTitle")
 
     arm_groups = list((design.get("armsInterventionsModule") or {}).get("armGroups") or [])
     if not arm_groups:
@@ -85,10 +88,15 @@ def _compact_trial(study: dict[str, Any], *, include_raw: bool = False) -> dict[
         eligibility_summary = " ".join(eligibility_summary.split())[:500]
 
     compact = {
+        # Canonical compact keys
         "nct_id": nct_id,
-        "brief_title": ident.get("briefTitle"),
-        "official_title": ident.get("officialTitle"),
-        "overall_status": status_module.get("overallStatus"),
+        "brief_title": brief_title,
+        "official_title": official_title,
+        "overall_status": overall_status,
+        # Ergonomic aliases used frequently by model code
+        "id": nct_id,
+        "title": brief_title or official_title,
+        "status": overall_status,
         "study_type": design.get("studyType"),
         "phases": list(design.get("phases") or []),
         "enrollment": (design.get("enrollmentInfo") or {}).get("count"),

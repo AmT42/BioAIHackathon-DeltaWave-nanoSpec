@@ -3,14 +3,17 @@ from __future__ import annotations
 import builtins
 import contextlib
 import io
+import importlib.metadata
 import json
 import re
+import shlex
 import subprocess
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -68,6 +71,25 @@ _DEFAULT_DENIED_IMPORT_MODULES = {
 }
 _KG_TOOL_NAMES = {"kg_cypher_execute", "kg_query"}
 _KG_GATED_PUBMED_TOOLS = {"pubmed_search", "pubmed_esearch"}
+
+
+def _safe_path_segment(value: str | None, fallback: str = "item") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    normalized = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in text)
+    normalized = normalized.strip("._")
+    return normalized or fallback
+
+
+def _slug_from_text(value: str, *, fallback: str = "line", max_len: int = 56) -> str:
+    compact = " ".join(str(value or "").split())
+    if not compact:
+        return fallback
+    slug = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in compact).strip("_")
+    if not slug:
+        return fallback
+    return slug[:max_len]
 
 
 def _coerce_for_payload(value: Any, *, key: str | None = None) -> Any:
@@ -571,6 +593,14 @@ class ReplBindings:
                     if stripped:
                         normalized["intervention_terms"] = [stripped]
 
+        if tool_name == "longevity_drugage_query":
+            if "query" not in normalized:
+                for alias in ("compound_name", "compound", "name", "intervention", "term"):
+                    value = normalized.get(alias)
+                    if isinstance(value, str) and value.strip():
+                        normalized["query"] = value.strip()
+                        break
+
         return normalized
 
     def _tool_error_hint(self, tool_name: str, error_message: str) -> str | None:
@@ -602,6 +632,11 @@ class ReplBindings:
                 "Hint: pass ITP summary URLs explicitly, e.g. "
                 "`longevity_itp_fetch_summary(ids=['<itp_summary_url>'])`. "
                 "Do not call this tool without ids."
+            )
+        if tool_name == "longevity_drugage_query" and "'query' is required" in lowered:
+            return (
+                "Hint: use `longevity_drugage_query(query='metformin')`. "
+                "Aliases like `compound_name` are accepted, but `query` is canonical."
             )
         return None
 
@@ -792,7 +827,17 @@ class ReplSessionManager:
 
 
 def _bash_disabled(*_args: Any, **_kwargs: Any) -> Any:
-    raise RuntimeError("bash(...) is disabled inside repl_exec. Use the top-level tool bash_exec.")
+    raise RuntimeError(
+        "bash(...) is disabled inside repl_exec. "
+        "Do not run shell in Python blocks; use the top-level bash_exec tool instead."
+    )
+
+
+def _bash_exec_disabled(*_args: Any, **_kwargs: Any) -> Any:
+    raise RuntimeError(
+        "bash_exec(...) cannot be called from inside repl_exec Python code. "
+        "Run bash_exec as a separate top-level tool call: bash_exec(command='...')."
+    )
 
 
 def _grep_disabled(*_args: Any, **_kwargs: Any) -> Any:
@@ -867,6 +912,7 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
         "min",
         "next",
         "object",
+        "open",
         "print",
         "repr",
         "range",
@@ -1007,20 +1053,45 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
                 "help_tools",
                 "help_tool",
                 "help_examples",
+                "installed_packages",
                 "env_vars",
                 "runtime_info",
             ],
         }
 
+    def _installed_packages(limit: int = 200, prefix: str | None = None) -> dict[str, Any]:
+        max_items = max(1, min(int(limit), 1000))
+        normalized_prefix = str(prefix or "").strip().lower()
+        rows: list[dict[str, str]] = []
+        try:
+            for dist in importlib.metadata.distributions():
+                name = str(dist.metadata.get("Name") or "").strip()
+                if not name:
+                    continue
+                if normalized_prefix and not name.lower().startswith(normalized_prefix):
+                    continue
+                rows.append({"name": name, "version": str(dist.version or "")})
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}", "items": [], "count": 0, "truncated": False}
+
+        rows.sort(key=lambda item: item["name"].lower())
+        return {
+            "count": len(rows),
+            "truncated": len(rows) > max_items,
+            "items": rows[:max_items],
+        }
+
     globals_map: dict[str, Any] = {
         "__builtins__": safe_builtins,
         "bash": _bash_disabled,
+        "bash_exec": _bash_exec_disabled,
         "grep": _grep_disabled,
         "parallel_map": bindings.parallel_map,
         "json": json,
         "help_tools": lambda: sorted(bindings.tools.names()),
         "help_tool": _help_tool,
         "help_examples": _help_examples,
+        "installed_packages": _installed_packages,
         "help_bash": lambda: (
             "Use bash_exec for shell tasks: codebase navigation (rg/ls/cat), "
             "workspace edits, and custom API calls (curl/wget)."
@@ -1034,10 +1105,12 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
         "help_repl": lambda: (
             "Use repl_exec for Python wrappers/data transforms and bash_exec for shell commands.\n"
             "Use bash_exec for navigation (`rg`, `ls`, `cat`), file workflow, and vendor API calls (`curl`/`wget`).\n"
+            "Important: bash_exec is a top-level tool call, not a Python function inside repl_exec blocks.\n"
             "Do not import internal project modules in REPL; wrappers are already available as global callables.\n"
             "Call help_tools() / help_tool('name') when unsure about wrapper signatures.\n"
             "Use help_examples('longevity') and help_examples('shell_vs_repl') for safe workflow snippets.\n"
             "Call runtime_info() for Python/workspace/tool/shell policy details.\n"
+            "Call installed_packages(limit=200) on first turn to inspect Python packages in this runtime.\n"
             "Use env_vars() to inspect current user-defined REPL variables (name/type/preview).\n"
             "Do not import from agent.tools.*; wrappers are already available as top-level functions.\n"
             "Search tools usually take query + limit (or term + retmax aliases).\n"
@@ -1073,11 +1146,14 @@ class ReplRuntime:
         *,
         tools: ToolRegistry,
         workspace_root: Path,
+        artifact_root: Path | None = None,
         allowed_command_prefixes: tuple[str, ...],
         blocked_command_prefixes: tuple[str, ...],
         blocked_command_patterns: tuple[str, ...] = (),
         shell_policy_mode: str = "open",
         max_stdout_bytes: int,
+        stdout_soft_line_limit: int = 500,
+        stdout_max_line_artifacts: int = 12,
         max_wall_time_seconds: int,
         max_tool_calls_per_exec: int,
         session_manager: ReplSessionManager,
@@ -1101,9 +1177,15 @@ class ReplRuntime:
         lazy_install_index_url: str | None = None,
     ) -> None:
         self.tools = tools
+        self.workspace_root = Path(workspace_root).resolve()
         self.max_wall_time_seconds = max(1, int(max_wall_time_seconds))
         self.max_stdout_bytes = max(1024, int(max_stdout_bytes))
+        self.stdout_soft_line_limit = max(120, int(stdout_soft_line_limit))
+        self.stdout_max_line_artifacts = max(1, int(stdout_max_line_artifacts))
         self.max_tool_calls_per_exec = max(1, int(max_tool_calls_per_exec))
+        self.artifact_root = Path(artifact_root).resolve() if artifact_root is not None else None
+        self._stdout_artifact_seq = 0
+        self._stdout_artifact_seq_lock = threading.Lock()
         self.shell_policy_mode = shell_policy_mode if shell_policy_mode in {"guarded", "open"} else "open"
         self.env_snapshot_mode = (
             env_snapshot_mode if env_snapshot_mode in {"off", "debug", "always"} else "always"
@@ -1165,6 +1247,11 @@ class ReplRuntime:
                 max_output_bytes=self.max_stdout_bytes,
             )
         )
+
+    def _next_stdout_artifact_seq(self) -> int:
+        with self._stdout_artifact_seq_lock:
+            self._stdout_artifact_seq += 1
+            return self._stdout_artifact_seq
 
     def _is_import_denied(self, module_name: str) -> bool:
         normalized = str(module_name or "").strip()
@@ -1318,6 +1405,136 @@ class ReplRuntime:
             return text, False
         return encoded[: self.max_stdout_bytes].decode("utf-8", errors="replace"), True
 
+    def _stdout_artifact_dir(
+        self,
+        *,
+        user_msg_index: int,
+        request_index: int,
+        exec_seq: int,
+    ) -> Path | None:
+        if self.artifact_root is None:
+            return None
+        day = datetime.now(timezone.utc).strftime("%Y%m%d")
+        turn_dir = f"turn-m{user_msg_index:04d}-r{request_index:04d}-e{exec_seq:04d}"
+        return self.artifact_root / "repl_stdout" / day / turn_dir
+
+    def _display_artifact_path(self, path: Path) -> str:
+        # Prefer workspace-relative paths because bash_exec runs from workspace root.
+        try:
+            rel = path.resolve().relative_to(self.workspace_root)
+            return str(rel)
+        except Exception:
+            pass
+        if self.artifact_root is not None:
+            try:
+                rel_to_artifacts = path.resolve().relative_to(self.artifact_root.resolve())
+                return str(rel_to_artifacts)
+            except Exception:
+                pass
+        return str(path)
+
+    def _write_long_stdout_artifact(
+        self,
+        *,
+        user_msg_index: int,
+        request_index: int,
+        exec_seq: int,
+        line_number: int,
+        line_text: str,
+    ) -> dict[str, Any] | None:
+        base = self._stdout_artifact_dir(
+            user_msg_index=user_msg_index,
+            request_index=request_index,
+            exec_seq=exec_seq,
+        )
+        if base is None:
+            return None
+        file_name = f"line-{line_number:04d}-chars-{len(line_text)}.md"
+        path = base / file_name
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                (
+                    "# REPL Stdout Full Line\n\n"
+                    f"- line_number: `{line_number}`\n"
+                    f"- chars: `{len(line_text)}`\n\n"
+                    "```text\n"
+                    f"{line_text}\n"
+                    "```\n"
+                ),
+                encoding="utf-8",
+            )
+        except Exception:
+            return None
+        display_path = self._display_artifact_path(path)
+        quoted_path = shlex.quote(display_path)
+        preview = " ".join(line_text.split())[:160]
+        return {
+            "kind": "repl_stdout_full_line",
+            "name": file_name,
+            "path": str(path),
+            "display_path": display_path,
+            "line_number": line_number,
+            "chars": len(line_text),
+            "preview": preview,
+            "inspect_sed": f"bash_exec(command=\"sed -n '1,120p' {quoted_path}\")",
+            "inspect_rg": f"bash_exec(command=\"rg -n 'keyword_here' {quoted_path}\")",
+        }
+
+    def _cap_long_stdout_lines(
+        self,
+        *,
+        text: str,
+        user_msg_index: int,
+        request_index: int,
+        exec_seq: int,
+    ) -> tuple[str, list[dict[str, Any]], int]:
+        if not text:
+            return text, [], 0
+        lines = text.splitlines(keepends=True)
+        out_lines: list[str] = []
+        artifacts: list[dict[str, Any]] = []
+        capped_lines = 0
+        for line_idx, raw_line in enumerate(lines, start=1):
+            if raw_line.endswith("\n"):
+                body = raw_line[:-1]
+                newline = "\n"
+            else:
+                body = raw_line
+                newline = ""
+            if len(body) <= self.stdout_soft_line_limit:
+                out_lines.append(raw_line)
+                continue
+
+            capped_lines += 1
+            preview = body[: max(1, self.stdout_soft_line_limit - 3)] + "..."
+            artifact_entry: dict[str, Any] | None = None
+            if len(artifacts) < self.stdout_max_line_artifacts:
+                artifact_entry = self._write_long_stdout_artifact(
+                    user_msg_index=user_msg_index,
+                    request_index=request_index,
+                    exec_seq=exec_seq,
+                    line_number=line_idx,
+                    line_text=body,
+                )
+                if artifact_entry is not None:
+                    artifacts.append(artifact_entry)
+
+            if artifact_entry is not None:
+                display_path = str(artifact_entry.get("display_path") or artifact_entry.get("path"))
+                note = (
+                    f"[stdout capped at {self.stdout_soft_line_limit} chars; full line ({len(body)} chars) "
+                    f"saved to {display_path}; inspect with {artifact_entry['inspect_sed']} "
+                    f"or {artifact_entry['inspect_rg']}]"
+                )
+            else:
+                note = (
+                    f"[stdout line capped at {self.stdout_soft_line_limit} chars; full line artifact unavailable "
+                    "(artifact root missing or cap {self.stdout_max_line_artifacts} reached)]"
+                )
+            out_lines.append(f"{preview}\n{note}{newline}")
+        return "".join(out_lines), artifacts, capped_lines
+
     def execute(
         self,
         *,
@@ -1380,7 +1597,36 @@ class ReplRuntime:
         had_visible_output = bool(raw_stdout.strip())
 
         if not raw_stdout and not error:
-            raw_stdout = "REPL executed successfully but produced no visible output. Use print(...) to expose results."
+            if "print(" in code:
+                raw_stdout = (
+                    "REPL executed successfully but produced no visible output. "
+                    "Your code includes print(...), but those print statements may not have run "
+                    "(for example, empty loops or filters). "
+                    "Try printing counts first, e.g. print(result.shape()) or print(len(result.records))."
+                )
+            else:
+                raw_stdout = (
+                    "REPL executed successfully but produced no visible output. "
+                    "Use print(...) to expose results."
+                )
+
+        stdout_artifacts: list[dict[str, Any]] = []
+        stdout_capping: dict[str, Any] | None = None
+        if raw_stdout:
+            exec_seq = self._next_stdout_artifact_seq()
+            raw_stdout, stdout_artifacts, capped_lines = self._cap_long_stdout_lines(
+                text=raw_stdout,
+                user_msg_index=user_msg_index,
+                request_index=request_index,
+                exec_seq=exec_seq,
+            )
+            if capped_lines:
+                stdout_capping = {
+                    "line_soft_limit": self.stdout_soft_line_limit,
+                    "lines_capped": capped_lines,
+                    "artifacts_written": len(stdout_artifacts),
+                    "artifact_cap": self.stdout_max_line_artifacts,
+                }
 
         stdout, out_truncated = self._truncate(raw_stdout)
         stderr, err_truncated = self._truncate(raw_stderr)
@@ -1409,4 +1655,6 @@ class ReplRuntime:
             had_visible_output=had_visible_output,
             error=error,
             env_snapshot=env_snapshot,
+            artifacts=stdout_artifacts,
+            stdout_capping=stdout_capping,
         )

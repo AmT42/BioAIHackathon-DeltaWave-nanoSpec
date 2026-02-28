@@ -3,11 +3,12 @@ from __future__ import annotations
 import ast
 import operator
 from typing import Any
+import httpx
+from bs4 import BeautifulSoup
 
 from app.agent.tools.context import ToolContext
 from app.agent.tools.contracts import make_tool_output
 from app.agent.tools.registry import ToolRegistry, ToolSpec
-
 
 _ALLOWED_OPS: dict[type[ast.operator], Any] = {
     ast.Add: operator.add,
@@ -56,22 +57,42 @@ def tool_calc(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[s
     )
 
 
-def tool_web_search_mock(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+def tool_web_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
     query = str(payload.get("query", "")).strip()
     if not query:
         raise ValueError("'query' is required")
+        
+    url = "https://lite.duckduckgo.com/lite/"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    data = {"q": query}
+    try:
+        resp = httpx.post(url, headers=headers, data=data, timeout=10.0)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results = []
+        for tr in soup.find_all("tr"):
+            td = tr.find("td", class_="result-snippet")
+            if td:
+                snippet = td.get_text(" ", strip=True)
+                prev_tr = tr.find_previous_sibling("tr")
+                a_tag = prev_tr.find("a", class_="result-link") if prev_tr else None
+                if not a_tag:
+                    prev_prev_tr = prev_tr.find_previous_sibling("tr") if prev_tr else None
+                    a_tag = prev_prev_tr.find("a", class_="result-link") if prev_prev_tr else None
+                if a_tag:
+                    results.append({
+                        "title": a_tag.get_text(strip=True),
+                        "url": a_tag.get("href"),
+                        "snippet": snippet
+                    })
+    except Exception as e:
+        results = [{"title": "Error", "url": "", "snippet": str(e)}]
+
     return make_tool_output(
         source="builtin",
-        summary="Returned deterministic mock web search result.",
+        summary=f"Performed web search for {query}.",
         data={
             "query": query,
-            "results": [
-                {
-                    "title": f"Mock result for {query}",
-                    "url": "https://example.org/mock-result",
-                    "snippet": "This is a deterministic mock web result for demo purposes.",
-                }
-            ],
+            "results": results[:5],
         },
         ids=[],
         citations=[],
@@ -93,16 +114,19 @@ def tool_fetch_paper_stub(payload: dict[str, Any], ctx: ToolContext | None = Non
         {
             "title": f"{topic}: practical benchmark",
             "authors": ["C. Analyst"],
-            "year": 2025,
+            "year": 2023,
             "doi": "10.0000/mock-doi-2",
         },
     ]
     return make_tool_output(
         source="builtin",
-        summary="Returned deterministic mock papers.",
-        data={"topic": topic, "papers": papers},
-        ids=[paper["doi"] for paper in papers],
-        citations=[{"doi": paper["doi"], "title": paper["title"], "year": paper["year"]} for paper in papers],
+        summary="Returned mock paper stubs.",
+        data={
+            "topic": topic,
+            "papers": papers,
+        },
+        ids=[],
+        citations=[],
         ctx=ctx,
     )
 
@@ -129,12 +153,12 @@ def builtin_tool_specs() -> list[ToolSpec]:
             source="builtin",
         ),
         ToolSpec(
-            name="web_search_mock",
+            name="web_search",
             description=(
-                "WHEN: Return deterministic demo search output in offline/test contexts.\n"
-                "AVOID: Using as real web evidence.\n"
+                "WHEN: Need to search the internet for current or general information.\n"
+                "AVOID: Only using for biomedical data if a specialized wrapper is better.\n"
                 "CRITICAL_ARGS: query.\n"
-                "RETURNS: mock result list payload.\n"
+                "RETURNS: web search result list.\n"
                 "FAILS_IF: query is missing."
             ),
             input_schema={
@@ -142,7 +166,7 @@ def builtin_tool_specs() -> list[ToolSpec]:
                 "properties": {"query": {"type": "string"}},
                 "required": ["query"],
             },
-            handler=tool_web_search_mock,
+            handler=tool_web_search,
             source="builtin",
         ),
         ToolSpec(

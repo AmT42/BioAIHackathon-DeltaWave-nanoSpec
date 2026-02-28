@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterator, Sequence
 
 
@@ -236,6 +236,8 @@ class ReplExecutionResult:
     had_visible_output: bool
     error: str | None = None
     env_snapshot: dict[str, Any] | None = None
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
+    stdout_capping: dict[str, Any] | None = None
 
     def to_tool_output(self) -> dict[str, Any]:
         summary = "REPL execution completed."
@@ -243,6 +245,8 @@ class ReplExecutionResult:
             summary = f"REPL execution failed: {self.error}"
         elif not self.had_visible_output:
             summary = "REPL execution completed with no visible output; use print(...) to expose results."
+        if self.artifacts:
+            summary = f"{summary} Capped long stdout lines saved as {len(self.artifacts)} artifact(s)."
 
         return {
             "status": "error" if self.error else "success",
@@ -255,6 +259,8 @@ class ReplExecutionResult:
                 "truncated": self.truncated,
                 "had_visible_output": self.had_visible_output,
                 "env": self.env_snapshot,
+                "artifacts": self.artifacts,
+                "stdout_capping": self.stdout_capping,
             },
             "error": {"message": self.error} if self.error else None,
         }
