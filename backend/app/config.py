@@ -87,6 +87,10 @@ class Settings:
     repl_controlled_reload_enabled: bool
     repl_controlled_reload_exit_code: int
     repl_controlled_reload_delay_ms: int
+    repl_subagent_enabled: bool
+    repl_subagent_stdout_line_soft_limit: int
+    repl_subagent_max_iterations: int
+    repl_subagent_max_batch_workers: int
 
 
 def _normalize_reasoning_effort(value: str | None) -> str:
@@ -280,4 +284,10 @@ def get_settings() -> Settings:
         repl_controlled_reload_enabled=_env_bool("REPL_CONTROLLED_RELOAD_ENABLED", default=False),
         repl_controlled_reload_exit_code=int(_env_int("REPL_CONTROLLED_RELOAD_EXIT_CODE", default=75) or 75),
         repl_controlled_reload_delay_ms=int(_env_int("REPL_CONTROLLED_RELOAD_DELAY_MS", default=350) or 350),
+        repl_subagent_enabled=_env_bool("REPL_SUBAGENT_ENABLED", default=True),
+        repl_subagent_stdout_line_soft_limit=int(
+            _env_int("REPL_SUBAGENT_STDOUT_LINE_SOFT_LIMIT", default=20_000) or 20_000
+        ),
+        repl_subagent_max_iterations=int(_env_int("REPL_SUBAGENT_MAX_ITERATIONS", default=12) or 12),
+        repl_subagent_max_batch_workers=int(_env_int("REPL_SUBAGENT_MAX_BATCH_WORKERS", default=4) or 4),
     )

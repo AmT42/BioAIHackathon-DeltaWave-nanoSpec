@@ -113,6 +113,14 @@ Each `./backend/scripts/eve-up.sh` run creates:
 - Runtime execution brief is injected into the system prompt each turn (tool list, shell policy/mode, limits, import policy, helpers), so the model uses the current environment contract.
 - Runtime code edits are tracked per turn (`REPL_GIT_TRACKING_ENABLED`). If runtime-sensitive files change (`REPL_RUNTIME_SENSITIVE_PATHS`), the assistant emits a reprompt-required handoff message so the next turn starts on updated code.
 - Controlled reload is available for safe turn-boundary restarts: set `REPL_CONTROLLED_RELOAD_ENABLED=true` and run via `backend/scripts/eve-up.sh` (default behavior). The backend exits with `REPL_CONTROLLED_RELOAD_EXIT_CODE` and auto-restarts in the script loop.
+- Sub-agent helpers are available in REPL when enabled: `llm_query(...)` and `llm_query_batch(...)`.
+  - Sub-agents run with clean history, attachable wrapper-tool subsets (`allowed_tools`), and per-query transcript artifacts.
+  - Use `env={...}` / `shared_env={...}` to pass large handles (IDs, objects) without dumping them into prompt text.
+  - Sub-agent REPL stdout line cap is configurable via `REPL_SUBAGENT_STDOUT_LINE_SOFT_LIMIT` (default `20000`), while main REPL keeps `REPL_STDOUT_LINE_SOFT_LIMIT` (default `500`).
+- Sub-agent controls:
+  - `REPL_SUBAGENT_ENABLED=true|false`
+  - `REPL_SUBAGENT_MAX_ITERATIONS`
+  - `REPL_SUBAGENT_MAX_BATCH_WORKERS`
 - `GEMINI_REPLAY_SIGNATURE_MODE` controls replay behavior when Gemini history is missing a required leading `thought_signature` (`strict` default: downgrade that historical step to text fallback; `placeholder`: inject compatibility placeholder signature).
 - Gemini requests use Google GenAI SDK streaming with thought-signature-aware tool replay.
 - If Gemini model naming fails (404 model not found), switch `GEMINI_MODEL` to a supported model for your key/project (for example `gemini/gemini-3-pro` or `gemini/gemini-3-flash`).

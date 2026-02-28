@@ -748,6 +748,60 @@ def test_repl_installed_packages_helper_returns_items() -> None:
     assert "True\nTrue\nTrue\nTrue" in out.stdout
 
 
+def test_repl_exposes_llm_query_helpers_when_enabled() -> None:
+    captured: dict[str, Any] = {}
+
+    def _llm_query_handler(**kwargs: Any) -> str:
+        captured["single"] = kwargs
+        return "sub-ok"
+
+    def _llm_query_batch_handler(**kwargs: Any) -> list[dict[str, Any]]:
+        captured["batch"] = kwargs
+        return [
+            {
+                "ok": True,
+                "task": "a",
+                "text": "batch-ok",
+                "error": None,
+                "trace_path": "/tmp/trace.json",
+                "tool_calls": 0,
+                "iterations": 1,
+            }
+        ]
+
+    runtime = _runtime(
+        enable_subagent_helpers=True,
+        llm_query_handler=_llm_query_handler,
+        llm_query_batch_handler=_llm_query_batch_handler,
+        subagent_stdout_line_soft_limit=20_000,
+    )
+
+    out = runtime.execute(
+        thread_id="thread-sub-q",
+        run_id="run-1",
+        request_index=9,
+        user_msg_index=4,
+        execution_id="repl-1",
+        code=(
+            "print(llm_query('inspect', env={'ids':[1,2]}, allowed_tools=['calc']))\n"
+            "rows = llm_query_batch(['a'])\n"
+            "print(rows[0]['ok'])"
+        ),
+    )
+
+    assert out.error is None
+    assert "sub-ok" in out.stdout
+    assert "True" in out.stdout
+    assert captured["single"]["thread_id"] == "thread-sub-q"
+    assert captured["single"]["run_id"] == "run-1"
+    assert captured["single"]["request_index"] == 9
+    assert captured["single"]["user_msg_index"] == 4
+    assert captured["single"]["task"] == "inspect"
+    assert captured["single"]["env"] == {"ids": [1, 2]}
+    assert captured["single"]["allowed_tools"] == ["calc"]
+    assert captured["batch"]["tasks"] == ["a"]
+
+
 def test_repl_coerces_query_terms_from_merge_handle() -> None:
     runtime = _runtime_with_tools(_coercion_registry())
 
