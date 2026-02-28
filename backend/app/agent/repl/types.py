@@ -22,6 +22,30 @@ class IdListHandle(Sequence[str]):
     def to_list(self) -> list[str]:
         return list(self._values)
 
+    def head(self, n: int = 5) -> list[str]:
+        count = max(0, int(n))
+        return self._values[:count]
+
+    def unique(self) -> "IdListHandle":
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for value in self._values:
+            if value in seen:
+                continue
+            seen.add(value)
+            deduped.append(value)
+        return IdListHandle(deduped)
+
+    def union(self, other: Sequence[str]) -> "IdListHandle":
+        merged = list(self._values) + [str(item) for item in other]
+        return IdListHandle(merged).unique()
+
+    def __add__(self, other: Sequence[str]) -> "IdListHandle":
+        return self.union(other)
+
+    def __or__(self, other: Sequence[str]) -> "IdListHandle":
+        return self.union(other)
+
     def __repr__(self) -> str:
         preview = ", ".join(self._values[:5])
         suffix = "" if len(self._values) <= 5 else f", ... (+{len(self._values) - 5} more)"
@@ -44,6 +68,33 @@ class ToolResultHandle:
     @property
     def data(self) -> Any:
         return self._payload.get("data")
+
+    def _as_records(self, key: str) -> list[dict[str, Any]]:
+        data = self._payload.get("data")
+        if not isinstance(data, dict):
+            return []
+        value = data.get(key)
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, dict)]
+
+    @property
+    def records(self) -> list[dict[str, Any]]:
+        return self._as_records("records")
+
+    @property
+    def items(self) -> list[dict[str, Any]]:
+        records = self.records
+        if records:
+            return records
+        return self._as_records("items")
+
+    @property
+    def studies(self) -> list[dict[str, Any]]:
+        records = self.records
+        if records:
+            return records
+        return self._as_records("studies")
 
     @property
     def citations(self) -> list[dict[str, Any]]:
@@ -83,6 +134,31 @@ class ToolResultHandle:
 
     def result(self) -> dict[str, Any]:
         return dict(self._raw_result)
+
+    def keys(self) -> list[str]:
+        data = self._payload.get("data")
+        if isinstance(data, dict):
+            return sorted(str(key) for key in data.keys())
+        return []
+
+    def shape(self) -> dict[str, Any]:
+        data = self._payload.get("data")
+        if isinstance(data, dict):
+            return {
+                "data_type": "object",
+                "keys": self.keys(),
+                "records_count": len(self.records),
+                "items_count": len(self.items),
+                "studies_count": len(self.studies),
+                "ids_count": len(self.ids),
+            }
+        if isinstance(data, list):
+            return {"data_type": "list", "length": len(data), "ids_count": len(self.ids)}
+        return {"data_type": type(data).__name__, "ids_count": len(self.ids)}
+
+    def __iter__(self) -> Iterator[dict[str, Any]]:
+        rows = self.records or self.items or self.studies
+        return iter(rows)
 
     def __repr__(self) -> str:
         return self.preview(max_items=3, max_chars=240)

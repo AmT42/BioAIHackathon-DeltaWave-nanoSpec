@@ -57,6 +57,15 @@ _LAZY_INSTALL_PACKAGE_ALIASES = {
     "yaml": "pyyaml",
 }
 _SAFE_PACKAGE_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+_DEFAULT_DENIED_IMPORT_MODULES = {
+    "subprocess",
+    "pty",
+    "resource",
+    "ctypes",
+    "multiprocessing",
+    "signal",
+    "socket",
+}
 
 
 def _coerce_for_payload(value: Any, *, key: str | None = None) -> Any:
@@ -274,7 +283,84 @@ class ReplBindings:
             return set()
         return {str(item) for item in required}
 
+    def _merge_field_for_tool_result(self, tool_name: str) -> str | None:
+        normalized = str(tool_name or "").strip().lower()
+        if normalized in {"normalize_drug", "rxnorm_resolve"}:
+            return "drug_candidates"
+        if normalized in {"normalize_compound", "pubchem_resolve"}:
+            return "compound_candidates"
+        if normalized in {"normalize_ontology", "ols_search_terms"}:
+            return "ontology_candidates"
+        return None
+
+    def _infer_user_text_from_candidate(self, value: Any) -> str | None:
+        if isinstance(value, ToolResultHandle):
+            data = value.data
+            if isinstance(data, dict):
+                query = data.get("query")
+                if isinstance(query, str) and query.strip():
+                    return query.strip()
+        if isinstance(value, dict):
+            for key in ("query", "term", "user_text"):
+                text = value.get(key)
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+        return None
+
+    def _coerce_merge_candidates_positional(self, arg: Any) -> dict[str, Any]:
+        if isinstance(arg, ToolResultHandle):
+            field = self._merge_field_for_tool_result(arg.tool_name)
+            if field is None:
+                raise ValueError(
+                    "Unsupported positional ToolResultHandle for 'normalize_merge_candidates'. "
+                    "Pass normalization handles from normalize_drug/normalize_compound/normalize_ontology."
+                )
+            user_text = self._infer_user_text_from_candidate(arg)
+            payload: dict[str, Any] = {field: arg.data}
+            if user_text:
+                payload["user_text"] = user_text
+            return payload
+
+        if isinstance(arg, list):
+            payload: dict[str, Any] = {}
+            for item in arg:
+                if isinstance(item, ToolResultHandle):
+                    field = self._merge_field_for_tool_result(item.tool_name)
+                    if field and field not in payload:
+                        payload[field] = item.data
+                    if "user_text" not in payload:
+                        inferred = self._infer_user_text_from_candidate(item)
+                        if inferred:
+                            payload["user_text"] = inferred
+                    continue
+                if isinstance(item, dict):
+                    for key in ("drug_candidates", "compound_candidates", "ontology_candidates", "user_text"):
+                        if key in item and key not in payload:
+                            payload[key] = _coerce_for_payload(item.get(key), key=key)
+                    if "user_text" not in payload:
+                        inferred = self._infer_user_text_from_candidate(item)
+                        if inferred:
+                            payload["user_text"] = inferred
+                    continue
+                raise ValueError(
+                    "Unsupported list element for 'normalize_merge_candidates'. "
+                    "Expected ToolResultHandle or dict items."
+                )
+            if "user_text" not in payload:
+                raise ValueError(
+                    "normalize_merge_candidates requires 'user_text'. "
+                    "Pass user_text explicitly or include a normalization result with a query."
+                )
+            return payload
+
+        raise ValueError(
+            "Unsupported positional argument for 'normalize_merge_candidates'. "
+            "Use a normalization ToolResultHandle, list of handles, or keyword args."
+        )
+
     def _coerce_single_positional(self, tool_name: str, arg: Any) -> dict[str, Any]:
+        if tool_name == "normalize_merge_candidates":
+            return self._coerce_merge_candidates_positional(arg)
         if isinstance(arg, dict):
             return _coerce_for_payload(arg)  # type: ignore[assignment]
         if isinstance(arg, IdListHandle):
@@ -498,6 +584,46 @@ def _grep_disabled(*_args: Any, **_kwargs: Any) -> Any:
     raise RuntimeError("grep(...) is disabled inside repl_exec. Use bash_exec with an rg command.")
 
 
+def _example_value_for_schema(schema: dict[str, Any]) -> Any:
+    value_type = str(schema.get("type") or "")
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list) and enum_values:
+        return enum_values[0]
+    if "default" in schema:
+        return schema.get("default")
+    if value_type == "string":
+        return "..."
+    if value_type == "integer":
+        return 1
+    if value_type == "number":
+        return 1.0
+    if value_type == "boolean":
+        return False
+    if value_type == "array":
+        return []
+    if value_type == "object":
+        return {}
+    return "..."
+
+
+def _build_tool_example(
+    *,
+    tool_name: str,
+    properties: dict[str, Any],
+    required: list[str],
+) -> str:
+    ordered_keys = [str(name) for name in required]
+    for name in sorted(properties.keys()):
+        text = str(name)
+        if text not in ordered_keys:
+            ordered_keys.append(text)
+    args: list[str] = []
+    for name in ordered_keys[:4]:
+        schema = properties.get(name) if isinstance(properties.get(name), dict) else {}
+        args.append(f"{name}={repr(_example_value_for_schema(schema))}")
+    return f"{tool_name}({', '.join(args)})"
+
+
 def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
     safe_builtin_names = {
         "abs",
@@ -555,12 +681,59 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
         schema = spec.input_schema if isinstance(spec.input_schema, dict) else {}
         properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
         required = schema.get("required") if isinstance(schema.get("required"), list) else []
+        property_hints: dict[str, Any] = {}
+        for raw_name, raw_schema in properties.items():
+            name = str(raw_name)
+            schema_obj = raw_schema if isinstance(raw_schema, dict) else {}
+            hint: dict[str, Any] = {
+                "type": schema_obj.get("type"),
+                "required": name in {str(item) for item in required},
+            }
+            if "default" in schema_obj:
+                hint["default"] = schema_obj.get("default")
+            if isinstance(schema_obj.get("enum"), list):
+                hint["enum"] = schema_obj.get("enum")
+            property_hints[name] = hint
         return {
             "name": spec.name,
             "required_args": [str(item) for item in required],
-            "properties": sorted(str(key) for key in properties.keys()),
+            "properties": property_hints,
             "source": spec.source,
+            "example": _build_tool_example(
+                tool_name=spec.name,
+                properties={str(k): v for k, v in properties.items() if isinstance(v, dict)},
+                required=[str(item) for item in required],
+            ),
         }
+
+    def _help_examples(topic: str = "longevity") -> dict[str, Any]:
+        normalized_topic = str(topic or "longevity").strip().lower()
+        examples: dict[str, list[str]] = {
+            "longevity": [
+                "res = normalize_ontology(query='Hyperbaric oxygen therapy', limit=5)",
+                "print(res.preview())",
+                "merged = normalize_merge_candidates([res], user_text='Hyperbaric oxygen therapy')",
+                "terms = retrieval_build_query_terms(concept=merged.data.get('concept'))",
+                "print(terms.preview())",
+                "pm = pubmed_search(query='\"Hyperbaric Oxygenation\" AND aging', limit=8)",
+                "docs = pubmed_fetch(ids=pm.ids.head(5), include_abstract=True)",
+                "print(docs.shape())",
+                "for row in docs: print(row.get('pmid'), row.get('title'))",
+            ],
+            "pubmed": [
+                "pm = pubmed_search(query='exercise AND alzheimer', limit=5)",
+                "docs = pubmed_fetch(ids=pm.ids.head(3), include_abstract=True)",
+                "print(docs.preview())",
+            ],
+            "trials": [
+                "hits = clinicaltrials_search(query='hyperbaric oxygen therapy aging', limit=5)",
+                "trials = clinicaltrials_fetch(ids=hits.ids.head(3))",
+                "print(trials.shape())",
+            ],
+        }
+        if normalized_topic not in examples:
+            normalized_topic = "longevity"
+        return {"topic": normalized_topic, "examples": examples[normalized_topic], "available_topics": sorted(examples.keys())}
 
     def _env_vars() -> dict[str, Any]:
         baseline = globals_map.get("__repl_baseline_names__")
@@ -573,6 +746,23 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
             redact_keys=("api_key", "token", "secret", "password", "auth", "cookie"),
         )
 
+    def _runtime_info() -> dict[str, Any]:
+        return {
+            "python_version": sys.version.split(" ", 1)[0],
+            "workspace_root": str(bindings.shell.policy.workspace_root),
+            "bash_allowed_prefixes": sorted(str(item) for item in bindings.shell.policy.allowed_prefixes),
+            "bash_blocked_prefixes": sorted(str(item) for item in bindings.shell.policy.blocked_prefixes),
+            "available_tools": sorted(bindings.tools.names()),
+            "helpers": [
+                "help_repl",
+                "help_tools",
+                "help_tool",
+                "help_examples",
+                "env_vars",
+                "runtime_info",
+            ],
+        }
+
     globals_map: dict[str, Any] = {
         "__builtins__": safe_builtins,
         "bash": _bash_disabled,
@@ -581,19 +771,26 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
         "json": json,
         "help_tools": lambda: sorted(bindings.tools.names()),
         "help_tool": _help_tool,
+        "help_examples": _help_examples,
         "help_bash": lambda: "Use bash_exec for shell commands, e.g. bash_exec(command='rg -n \"query\" .').",
+        "help_terminal": lambda: "Use bash_exec(command='...'). Call runtime_info() for allowed/blocked prefixes and workspace root.",
         "env_vars": _env_vars,
+        "runtime_info": _runtime_info,
         "help_repl": lambda: (
             "Use repl_exec for Python + tool wrappers and bash_exec for shell.\n"
             "Call help_tools() / help_tool('name') when unsure about wrapper signatures.\n"
+            "Use help_examples('longevity') for safe end-to-end workflow snippets.\n"
+            "Call runtime_info() for Python/workspace/tool/shell policy details.\n"
             "Use env_vars() to inspect current user-defined REPL variables (name/type/preview).\n"
             "Search tools usually take query + limit (or term + retmax aliases).\n"
             "Fetch tools usually take ids (aliases pmids/nct_ids are accepted).\n"
+            "Handles expose ids.head(n), shape(), records/items/studies convenience accessors.\n"
             "Example:\n"
             "  res = pubmed_search(query='exercise AND alzheimer', limit=3)\n"
             "  print(res.preview())\n"
             "  rows = pubmed_fetch(ids=res.ids[:3], include_abstract=True)\n"
-            "  print(rows.preview())"
+            "  print(rows.shape())\n"
+            "  for rec in rows: print(rec.get('pmid'))"
         ),
     }
 
@@ -621,7 +818,7 @@ class ReplRuntime:
         max_wall_time_seconds: int,
         max_tool_calls_per_exec: int,
         session_manager: ReplSessionManager,
-        env_snapshot_mode: str = "debug",
+        env_snapshot_mode: str = "always",
         env_snapshot_max_items: int = 80,
         env_snapshot_max_preview_chars: int = 160,
         env_snapshot_redact_keys: tuple[str, ...] = (
@@ -632,8 +829,9 @@ class ReplRuntime:
             "auth",
             "cookie",
         ),
-        import_policy: str = "broad",
+        import_policy: str = "permissive",
         import_allow_modules: tuple[str, ...] = (),
+        import_deny_modules: tuple[str, ...] = (),
         lazy_install_enabled: bool = False,
         lazy_install_allowlist: tuple[str, ...] = (),
         lazy_install_timeout_seconds: int = 60,
@@ -644,7 +842,7 @@ class ReplRuntime:
         self.max_stdout_bytes = max(1024, int(max_stdout_bytes))
         self.max_tool_calls_per_exec = max(1, int(max_tool_calls_per_exec))
         self.env_snapshot_mode = (
-            env_snapshot_mode if env_snapshot_mode in {"off", "debug", "always"} else "debug"
+            env_snapshot_mode if env_snapshot_mode in {"off", "debug", "always"} else "always"
         )
         self.env_snapshot_max_items = max(10, int(env_snapshot_max_items))
         self.env_snapshot_max_preview_chars = max(32, int(env_snapshot_max_preview_chars))
@@ -652,12 +850,22 @@ class ReplRuntime:
             key.strip().lower() for key in env_snapshot_redact_keys if str(key).strip()
         ) or ("api_key", "token", "secret", "password", "auth", "cookie")
 
-        self.import_policy = import_policy if import_policy in {"minimal", "broad"} else "broad"
+        self.import_policy = import_policy if import_policy in {"minimal", "broad", "permissive"} else "permissive"
         self.allowed_import_roots = set(_MINIMAL_ALLOWED_IMPORT_ROOTS)
         self.allowed_import_modules = set(_MINIMAL_ALLOWED_IMPORT_MODULES)
         if self.import_policy == "broad":
             self.allowed_import_roots.update(_BROAD_EXTRA_IMPORT_ROOTS)
             self.allowed_import_modules.update(_BROAD_EXTRA_IMPORT_MODULES)
+        self.denied_import_roots: set[str] = set()
+        self.denied_import_modules: set[str] = set()
+        denied_candidates = set(_DEFAULT_DENIED_IMPORT_MODULES)
+        denied_candidates.update(str(item).strip() for item in import_deny_modules if str(item).strip())
+        for candidate in denied_candidates:
+            if "." in candidate:
+                self.denied_import_modules.add(candidate)
+                self.denied_import_roots.add(candidate.split(".", 1)[0])
+            else:
+                self.denied_import_roots.add(candidate)
         for module in import_allow_modules:
             candidate = str(module).strip()
             if not candidate:
@@ -692,21 +900,47 @@ class ReplRuntime:
             )
         )
 
+    def _is_import_denied(self, module_name: str) -> bool:
+        normalized = str(module_name or "").strip()
+        if not normalized:
+            return True
+        root = normalized.split(".", 1)[0]
+        if root in self.denied_import_roots:
+            return True
+        for denied in self.denied_import_modules:
+            if normalized == denied or normalized.startswith(f"{denied}."):
+                return True
+        return False
+
     def _is_import_allowed(self, module_name: str) -> bool:
         normalized = str(module_name or "").strip()
         if not normalized:
             return False
+        if self._is_import_denied(normalized):
+            return False
+        if self.import_policy == "permissive":
+            return True
         if normalized in self.allowed_import_modules:
             return True
         return normalized.split(".", 1)[0] in self.allowed_import_roots
 
     def _format_blocked_import_message(self, module_name: str) -> str:
+        if self._is_import_denied(module_name):
+            denied_roots = ", ".join(sorted(self.denied_import_roots))
+            denied_modules = ", ".join(sorted(self.denied_import_modules))
+            return (
+                f"Import '{module_name}' is blocked by REPL denylist. "
+                f"Denied roots: {denied_roots or '(none)'}. "
+                f"Denied modules: {denied_modules or '(none)'}. "
+                "Use registered wrappers or bash_exec for controlled shell tasks."
+            )
+
         allowed_roots = ", ".join(sorted(self.allowed_import_roots))
         allowed_modules = ", ".join(sorted(self.allowed_import_modules))
         return (
             f"Import '{module_name}' is blocked in REPL. Allowed roots: {allowed_roots}. "
             f"Allowed modules: {allowed_modules}. "
-            "Use tool wrappers for biomedical retrieval and bash_exec for shell commands."
+            "Try help_tools()/help_tool('name') for wrappers, or run shell operations via bash_exec."
         )
 
     def _install_package(self, package_name: str) -> bool:

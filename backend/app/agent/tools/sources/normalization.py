@@ -9,6 +9,7 @@ from app.agent.tools.context import ToolContext
 from app.agent.tools.contracts import make_tool_output
 from app.agent.tools.errors import ToolExecutionError
 from app.agent.tools.http_client import SimpleHttpClient
+from app.agent.tools.policy import build_pubmed_evidence_queries, should_run_trial_publication_audit
 from app.agent.tools.registry import ToolSpec
 
 
@@ -868,6 +869,69 @@ def build_normalization_tools(http: SimpleHttpClient, settings: Settings | None 
         }
         return build_search_terms(remapped, ctx)
 
+    def retrieval_build_pubmed_templates(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        intervention_terms = payload.get("intervention_terms")
+        if intervention_terms is None:
+            terms = payload.get("terms")
+            if isinstance(terms, dict):
+                intervention_terms = terms.get("pubmed") or terms.get("intervention")
+        if intervention_terms is None and isinstance(payload.get("concept"), dict):
+            label = str((payload.get("concept") or {}).get("label") or "").strip()
+            if label:
+                intervention_terms = [label]
+        if intervention_terms is None:
+            intervention_terms = payload.get("query_terms")
+
+        if not isinstance(intervention_terms, list) or not intervention_terms:
+            raise ToolExecutionError(
+                code="VALIDATION_ERROR",
+                message="'intervention_terms' is required (or provide terms.pubmed / concept.label).",
+            )
+
+        clean_terms = [str(item).strip() for item in intervention_terms if str(item).strip()]
+        if not clean_terms:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="No valid intervention terms provided")
+
+        outcome_terms_raw = payload.get("outcome_terms") or []
+        outcome_terms = [str(item).strip() for item in outcome_terms_raw if str(item).strip()]
+        queries = build_pubmed_evidence_queries(
+            intervention_terms=clean_terms,
+            outcome_terms=outcome_terms or None,
+        )
+        return make_tool_output(
+            source="internal",
+            summary=f"Built {len(queries)} PubMed evidence query template(s).",
+            data={"queries": queries, "intervention_terms": clean_terms, "outcome_terms": outcome_terms},
+            ids=list(queries.keys()),
+            ctx=ctx,
+        )
+
+    def retrieval_should_run_trial_audit(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        trials_raw = payload.get("trials") or payload.get("records") or payload.get("studies")
+        if isinstance(trials_raw, dict):
+            trials_raw = (trials_raw.get("records") if isinstance(trials_raw.get("records"), list) else None) or (
+                trials_raw.get("studies") if isinstance(trials_raw.get("studies"), list) else None
+            )
+        if not isinstance(trials_raw, list):
+            raise ToolExecutionError(
+                code="VALIDATION_ERROR",
+                message="'trials' (or 'records'/'studies') must be a list of trial records.",
+            )
+        trials = [item for item in trials_raw if isinstance(item, dict)]
+        should_run = should_run_trial_publication_audit(trials)
+        reason = (
+            "At least one completed/result-bearing trial found."
+            if should_run
+            else "No completed/result-bearing trials detected."
+        )
+        return make_tool_output(
+            source="internal",
+            summary=f"Trial publication audit recommended: {'yes' if should_run else 'no'}.",
+            data={"should_run": should_run, "reason": reason, "trial_count": len(trials)},
+            ids=["yes" if should_run else "no"],
+            ctx=ctx,
+        )
+
     tools: list[ToolSpec] = [
         ToolSpec(
             name="rxnorm_resolve",
@@ -1161,6 +1225,36 @@ def build_normalization_tools(http: SimpleHttpClient, settings: Settings | None 
                 "required": ["concept"],
             },
             handler=retrieval_build_query_terms,
+            source="internal",
+        ),
+        ToolSpec(
+            name="retrieval_build_pubmed_templates",
+            description="Build tiered PubMed query templates (systematic/rct/observational/broad).",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "intervention_terms": {"type": "array", "items": {"type": "string"}},
+                    "outcome_terms": {"type": "array", "items": {"type": "string"}},
+                    "terms": {"type": "object"},
+                    "concept": {"type": "object"},
+                    "query_terms": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+            handler=retrieval_build_pubmed_templates,
+            source="internal",
+        ),
+        ToolSpec(
+            name="retrieval_should_run_trial_audit",
+            description="Decide whether trial↔publication audit should run for current trial set.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "trials": {"type": "array", "items": {"type": "object"}},
+                    "records": {"type": "array", "items": {"type": "object"}},
+                    "studies": {"type": "array", "items": {"type": "object"}},
+                },
+            },
+            handler=retrieval_should_run_trial_audit,
             source="internal",
         ),
     ]

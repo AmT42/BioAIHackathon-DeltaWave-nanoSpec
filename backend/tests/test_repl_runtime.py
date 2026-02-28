@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from app.agent.repl import ReplRuntime, ReplSessionManager
+from app.agent.repl.types import IdListHandle, ToolResultHandle
 from app.agent.tools.contracts import make_tool_output
 from app.agent.tools.context import ToolContext
 from app.agent.tools.builtin import create_builtin_registry
@@ -81,6 +82,74 @@ def _echo_registry() -> ToolRegistry:
                     "required": ["ids"],
                 },
                 handler=demo_fetch,
+                source="test",
+            ),
+        ]
+    )
+
+
+def _merge_registry() -> ToolRegistry:
+    def normalize_ontology(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        return make_tool_output(
+            source="test",
+            summary="ontology",
+            data={"query": payload.get("query"), "hits": [{"id": "NCIT:C38065"}]},
+            ctx=ctx,
+        )
+
+    def normalize_drug(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        return make_tool_output(
+            source="test",
+            summary="drug",
+            data={"query": payload.get("query"), "candidates": []},
+            ctx=ctx,
+        )
+
+    def normalize_merge_candidates(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        return make_tool_output(
+            source="test",
+            summary="merged",
+            data={"payload": payload},
+            ctx=ctx,
+        )
+
+    return ToolRegistry(
+        [
+            ToolSpec(
+                name="normalize_ontology",
+                description="Ontology alias",
+                input_schema={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+                handler=normalize_ontology,
+                source="test",
+            ),
+            ToolSpec(
+                name="normalize_drug",
+                description="Drug alias",
+                input_schema={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+                handler=normalize_drug,
+                source="test",
+            ),
+            ToolSpec(
+                name="normalize_merge_candidates",
+                description="Merge alias",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "user_text": {"type": "string"},
+                        "drug_candidates": {"type": "object"},
+                        "ontology_candidates": {"type": "object"},
+                    },
+                    "required": ["user_text"],
+                },
+                handler=normalize_merge_candidates,
                 source="test",
             ),
         ]
@@ -191,7 +260,7 @@ def test_repl_blocks_unsafe_imports() -> None:
     )
 
     assert out.error is not None
-    assert "blocked in REPL" in out.stderr
+    assert "blocked" in out.stderr
 
 
 def test_repl_bash_helper_redirects_to_bash_exec() -> None:
@@ -327,3 +396,76 @@ def test_repl_env_snapshot_debug_mode_on_error() -> None:
     assert "res" in names
     assert "api_token" in names
     assert names["api_token"].get("preview") == "[REDACTED]"
+
+
+def test_id_list_handle_supports_union_and_addition() -> None:
+    left = IdListHandle(["1", "2"])
+    right = IdListHandle(["2", "3"])
+    merged = left + right
+    assert isinstance(merged, IdListHandle)
+    assert merged.to_list() == ["1", "2", "3"]
+    assert left.head(1) == ["1"]
+
+
+def test_tool_result_handle_records_iteration_and_shape() -> None:
+    handle = ToolResultHandle(
+        tool_name="demo",
+        payload={
+            "summary": "ok",
+            "ids": ["a"],
+            "data": {"records": [{"pmid": "1"}, {"pmid": "2"}]},
+        },
+        raw_result={"status": "success"},
+    )
+    rows = list(handle)
+    assert len(rows) == 2
+    assert rows[0]["pmid"] == "1"
+    shape = handle.shape()
+    assert shape["records_count"] == 2
+
+
+def test_repl_merge_candidates_accepts_positional_handle_list() -> None:
+    runtime = _runtime_with_tools(_merge_registry())
+
+    out = runtime.execute(
+        thread_id="thread-m",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code=(
+            "o = normalize_ontology(query='Hyperbaric oxygen therapy')\n"
+            "d = normalize_drug(query='Hyperbaric oxygen therapy')\n"
+            "m = normalize_merge_candidates([o, d])\n"
+            "print(m.data['payload']['user_text'])\n"
+            "print(sorted([k for k in m.data['payload'].keys() if k.endswith('_candidates')]))"
+        ),
+    )
+
+    assert out.error is None
+    assert "Hyperbaric oxygen therapy" in out.stdout
+    assert "drug_candidates" in out.stdout
+    assert "ontology_candidates" in out.stdout
+
+
+def test_repl_runtime_info_and_help_examples_helpers_available() -> None:
+    runtime = _runtime()
+
+    out = runtime.execute(
+        thread_id="thread-n",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code=(
+            "info = runtime_info()\n"
+            "print('workspace_root' in info)\n"
+            "print('help_examples' in info['helpers'])\n"
+            "ex = help_examples('longevity')\n"
+            "print(ex['topic'])\n"
+            "print(len(ex['examples']) > 0)"
+        ),
+    )
+
+    assert out.error is None
+    assert "True\nTrue\nlongevity\nTrue" in out.stdout

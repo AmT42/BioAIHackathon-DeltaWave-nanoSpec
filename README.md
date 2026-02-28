@@ -100,9 +100,12 @@ Each `./backend/scripts/eve-up.sh` run creates:
   - `repl_exec` for Python (thread-persistent variables; only printed REPL output is visible).
   - `bash_exec` for guarded shell commands.
 - REPL is wrapper-first: use `pubmed_search/pubmed_fetch/...` for retrieval, not `urllib`/`curl`.
-- In REPL, use `help_tools()`, `help_tool("name")`, `help_repl()`, and `env_vars()` for quick guidance/debugging.
-- REPL env snapshots are configurable (`REPL_ENV_SNAPSHOT_*`) and stream as `main_agent_repl_env` events (default `debug`: only on REPL errors).
-- Import behavior is configurable (`REPL_IMPORT_POLICY`, `REPL_IMPORT_ALLOW_MODULES`) with optional lazy pip install (`REPL_LAZY_INSTALL_*`).
+- In REPL, use `help_tools()`, `help_tool("name")`, `help_repl()`, `help_examples("longevity")`, and `env_vars()` for quick guidance/debugging.
+- REPL env snapshots are configurable (`REPL_ENV_SNAPSHOT_*`) and stream as `main_agent_repl_env` events (default `always` with redaction).
+- Import behavior is configurable (`REPL_IMPORT_POLICY`, `REPL_IMPORT_ALLOW_MODULES`, `REPL_IMPORT_DENY_MODULES`).
+- Preload-only package bootstrap is configurable (`REPL_PRELOAD_*`); lazy install is disabled by default.
+- `bash_exec` remains guarded by prefix policy (`REPL_ALLOWED_COMMAND_PREFIXES` + `REPL_BLOCKED_COMMAND_PREFIXES`).
+- Runtime execution brief is injected into the system prompt each turn (tool list, shell policy, import policy, helpers), so the model uses the current environment contract.
 - `GEMINI_REPLAY_SIGNATURE_MODE` controls replay behavior when Gemini history is missing a required leading `thought_signature` (`strict` default: downgrade that historical step to text fallback; `placeholder`: inject compatibility placeholder signature).
 - Gemini requests use Google GenAI SDK streaming with thought-signature-aware tool replay.
 - If Gemini model naming fails (404 model not found), switch `GEMINI_MODEL` to a supported model for your key/project (for example `gemini/gemini-3-pro` or `gemini/gemini-3-flash`).

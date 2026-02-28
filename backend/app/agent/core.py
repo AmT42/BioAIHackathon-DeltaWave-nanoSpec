@@ -150,6 +150,7 @@ class AgentCore:
             env_snapshot_redact_keys=settings.repl_env_snapshot_redact_keys,
             import_policy=settings.repl_import_policy,
             import_allow_modules=settings.repl_import_allow_modules,
+            import_deny_modules=settings.repl_import_deny_modules,
             lazy_install_enabled=settings.repl_lazy_install_enabled,
             lazy_install_allowlist=settings.repl_lazy_install_allowlist,
             lazy_install_timeout_seconds=settings.repl_lazy_install_timeout_seconds,
@@ -166,6 +167,30 @@ class AgentCore:
                 mock_mode=settings.mock_llm,
             ),
         }
+
+    def _runtime_system_prompt(self) -> str:
+        tool_names = sorted(self.tools.names())
+        tool_list = ", ".join(tool_names)
+        allowed_prefixes = ", ".join(sorted(self.settings.repl_allowed_command_prefixes))
+        blocked_prefixes = ", ".join(sorted(self.settings.repl_blocked_command_prefixes))
+        runtime_addendum = (
+            "\n\n## Runtime Environment Brief (authoritative)\n"
+            "- Execution model: `repl_exec` for Python wrappers, `bash_exec` for shell.\n"
+            "- Always prefer wrappers before ad-hoc shell/web calls for biomedical retrieval.\n"
+            "- Available wrapper tools right now:\n"
+            f"  {tool_list}\n"
+            "- REPL helper functions available at runtime:\n"
+            "  `help_repl()`, `help_tools()`, `help_tool('name')`, `help_examples('longevity')`, `runtime_info()`, `env_vars()`\n"
+            "- Result handle ergonomics:\n"
+            "  `res.ids.head(n)`, `res.shape()`, `res.records`, `for rec in res: ...`\n"
+            "- Shell policy for `bash_exec`:\n"
+            f"  allowed prefixes: {allowed_prefixes}\n"
+            f"  blocked prefixes: {blocked_prefixes}\n"
+            f"- REPL import policy: `{self.settings.repl_import_policy}`; denylist: `{', '.join(self.settings.repl_import_deny_modules)}`\n"
+            f"- REPL preload mode: enabled={self.settings.repl_preload_enabled}, profile=`{self.settings.repl_preload_profile}`\n"
+            "- If uncertain about args/signatures, call `help_tool('tool_name')` first, then print previews.\n"
+        )
+        return DEFAULT_SYSTEM_PROMPT.rstrip() + runtime_addendum
 
     async def run_turn_stream(
         self,
@@ -370,7 +395,7 @@ class AgentCore:
                     provider_client.stream_turn,
                     messages=provider_messages,
                     tools=tool_schemas,
-                    system_prompt=DEFAULT_SYSTEM_PROMPT,
+                    system_prompt=self._runtime_system_prompt(),
                     on_thinking_token=on_thinking_token,
                     on_text_token=on_text_token,
                 )

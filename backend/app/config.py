@@ -67,10 +67,16 @@ class Settings:
     repl_env_snapshot_redact_keys: tuple[str, ...]
     repl_import_policy: str
     repl_import_allow_modules: tuple[str, ...]
+    repl_import_deny_modules: tuple[str, ...]
     repl_lazy_install_enabled: bool
     repl_lazy_install_allowlist: tuple[str, ...]
     repl_lazy_install_timeout_seconds: int
     repl_lazy_install_index_url: str | None
+    repl_preload_enabled: bool
+    repl_preload_profile: str
+    repl_preload_packages: tuple[str, ...]
+    repl_preload_timeout_seconds: int
+    repl_preload_fail_mode: str
 
 
 def _normalize_reasoning_effort(value: str | None) -> str:
@@ -127,10 +133,24 @@ def _normalize_repl_env_snapshot_mode(value: str | None) -> str:
 
 
 def _normalize_repl_import_policy(value: str | None) -> str:
-    normalized = (value or "broad").strip().lower()
-    if normalized in {"minimal", "broad"}:
+    normalized = (value or "permissive").strip().lower()
+    if normalized in {"minimal", "broad", "permissive"}:
         return normalized
-    return "broad"
+    return "permissive"
+
+
+def _normalize_repl_preload_fail_mode(value: str | None) -> str:
+    normalized = (value or "warn_continue").strip().lower()
+    if normalized in {"warn_continue", "fail_fast"}:
+        return normalized
+    return "warn_continue"
+
+
+def _normalize_repl_preload_profile(value: str | None) -> str:
+    normalized = (value or "bio_data_full").strip().lower()
+    if normalized in {"bio_data_full", "data_first", "minimal_core"}:
+        return normalized
+    return "bio_data_full"
 
 
 def get_settings() -> Settings:
@@ -146,19 +166,24 @@ def get_settings() -> Settings:
     workspace_root = Path(os.getenv("REPL_WORKSPACE_ROOT", str(backend_root.parent))).expanduser().resolve()
     allowed_prefixes = _env_csv(
         "REPL_ALLOWED_COMMAND_PREFIXES",
-        "pwd,ls,cat,head,tail,rg,grep,find,git,python,python3,pytest,npm,node,make,bash,curl,wget",
+        "pwd,ls,cat,head,tail,rg,grep,find,git,python,python3,pip,uv,pytest,npm,node,make,bash,curl,wget,jq,awk,sed,cut,sort,uniq,wc,xargs,tar,gzip,gunzip,unzip",
     )
     blocked_prefixes = _env_csv(
         "REPL_BLOCKED_COMMAND_PREFIXES",
         "rm,shutdown,reboot,mkfs,dd,sudo,ssh,scp,nc,nmap,chmod,chown",
     )
-    repl_env_snapshot_mode = _normalize_repl_env_snapshot_mode(os.getenv("REPL_ENV_SNAPSHOT_MODE", "debug"))
-    repl_import_policy = _normalize_repl_import_policy(os.getenv("REPL_IMPORT_POLICY", "broad"))
+    repl_env_snapshot_mode = _normalize_repl_env_snapshot_mode(os.getenv("REPL_ENV_SNAPSHOT_MODE", "always"))
+    repl_import_policy = _normalize_repl_import_policy(os.getenv("REPL_IMPORT_POLICY", "permissive"))
     repl_import_allow_modules = _env_csv("REPL_IMPORT_ALLOW_MODULES", "")
+    repl_import_deny_modules = _env_csv(
+        "REPL_IMPORT_DENY_MODULES",
+        "subprocess,pty,resource,ctypes,multiprocessing,signal,socket",
+    )
     repl_lazy_install_allowlist = _env_csv(
         "REPL_LAZY_INSTALL_ALLOWLIST",
         "requests,httpx,aiohttp,pandas,numpy,scipy",
     )
+    repl_preload_packages = _env_csv("REPL_PRELOAD_PACKAGES", "")
 
     return Settings(
         database_url=os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./chat.db"),
@@ -210,8 +235,14 @@ def get_settings() -> Settings:
         ),
         repl_import_policy=repl_import_policy,
         repl_import_allow_modules=repl_import_allow_modules,
-        repl_lazy_install_enabled=_env_bool("REPL_LAZY_INSTALL_ENABLED", default=True),
+        repl_import_deny_modules=repl_import_deny_modules,
+        repl_lazy_install_enabled=_env_bool("REPL_LAZY_INSTALL_ENABLED", default=False),
         repl_lazy_install_allowlist=repl_lazy_install_allowlist,
         repl_lazy_install_timeout_seconds=int(_env_int("REPL_LAZY_INSTALL_TIMEOUT_SECONDS", default=60) or 60),
         repl_lazy_install_index_url=os.getenv("REPL_LAZY_INSTALL_INDEX_URL"),
+        repl_preload_enabled=_env_bool("REPL_PRELOAD_ENABLED", default=True),
+        repl_preload_profile=_normalize_repl_preload_profile(os.getenv("REPL_PRELOAD_PROFILE", "bio_data_full")),
+        repl_preload_packages=repl_preload_packages,
+        repl_preload_timeout_seconds=int(_env_int("REPL_PRELOAD_TIMEOUT_SECONDS", default=180) or 180),
+        repl_preload_fail_mode=_normalize_repl_preload_fail_mode(os.getenv("REPL_PRELOAD_FAIL_MODE", "warn_continue")),
     )
