@@ -62,6 +62,17 @@ def test_science_registry_omits_key_gated_tools_without_keys(tmp_path: Path) -> 
     assert "pubmed_esearch" in names
 
 
+def test_science_registry_includes_kg_tools_when_enabled(tmp_path: Path) -> None:
+    settings = replace(
+        _settings(tmp_path),
+        enable_kg_tools=True,
+    )
+    registry = create_science_registry(settings)
+    names = {schema["function"]["name"] for schema in registry.openai_schemas()}
+
+    assert "kg_cypher_execute" in names
+
+
 def test_tool_output_contract_and_error_shape(tmp_path: Path) -> None:
     registry = create_science_registry(_settings(tmp_path))
     ctx = ToolContext(

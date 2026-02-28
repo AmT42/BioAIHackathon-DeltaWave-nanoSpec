@@ -225,3 +225,4 @@ def test_projection_rows_infer_subgraph_and_node_stats() -> None:
     assert stats["summary"]["edge_count"] >= 3
     assert stats["summary"]["node_type_count"] >= 4
     assert any(row["node_type"] == "Target" for row in stats["by_type"])
+

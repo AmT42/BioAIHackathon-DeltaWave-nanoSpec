@@ -1065,6 +1065,19 @@ class AgentCore:
                                 "ui_visible": False,
                             }
                         )
+                        await emit(
+                            {
+                                "type": "main_agent_tool_result",
+                                "thread_id": thread_id,
+                                "run_id": run_id,
+                                "segment_index": nested_segment,
+                                "tool_use_id": nested_call_id,
+                                "parent_tool_use_id": tc.id,
+                                "tool_name": nested_tool_name,
+                                "result": nested_result,
+                                "ui_visible": False,
+                            }
+                        )
 
                 if show_generic_tool_card:
                     await emit(

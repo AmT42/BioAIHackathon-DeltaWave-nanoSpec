@@ -108,17 +108,6 @@ function mergeKgGraphWithResult(
   return recomputeMergedImportanceStats(merged);
 }
 
-function rebuildKgGraphFromTurns(turns: Turn[]): KgMergedGraph {
-  let graph = createEmptyKgMergedGraph();
-  for (const turn of turns) {
-    for (const step of turn.workSteps) {
-      if (step.kind !== "tool") continue;
-      graph = mergeKgGraphWithResult(graph, step.toolName, step.toolResult ?? null);
-    }
-  }
-  return graph;
-}
-
 function findTurnIndexByRun(turns: Turn[], runId?: string): number {
   if (!runId) return -1;
   return turns.findIndex((turn) => turn.runId === runId);
@@ -182,7 +171,7 @@ function appendChunk(existing: string | undefined, incoming: string | undefined)
   return `${current}${chunk}`;
 }
 
-function parseTraceToSteps(message: HydratedMessage): { assistantText: string; steps: WorkStep[] } {
+function extractTraceBlocks(message: HydratedMessage): Array<Record<string, unknown>> {
   const metadata = message.metadata ?? {};
   const trace = (metadata.trace_v1 ?? {}) as Record<string, unknown>;
 
@@ -195,7 +184,11 @@ function parseTraceToSteps(message: HydratedMessage): { assistantText: string; s
       ? message.content_blocks
       : [];
 
-  const blocks = traceBlocks.length > 0 ? traceBlocks : fallbackBlocks;
+  return traceBlocks.length > 0 ? traceBlocks : fallbackBlocks;
+}
+
+function parseTraceToSteps(message: HydratedMessage): { assistantText: string; steps: WorkStep[] } {
+  const blocks = extractTraceBlocks(message);
   if (!Array.isArray(blocks) || blocks.length === 0) {
     return { assistantText: message.content ?? "", steps: [] };
   }
@@ -449,6 +442,31 @@ function hydrateTurns(messages: HydratedMessage[]): Turn[] {
   return turns;
 }
 
+function rebuildKgGraphFromMessages(messages: HydratedMessage[]): KgMergedGraph {
+  let graph = createEmptyKgMergedGraph();
+  const sorted = [...messages].sort((a, b) => {
+    const aTime = a.created_at ? Date.parse(a.created_at) : 0;
+    const bTime = b.created_at ? Date.parse(b.created_at) : 0;
+    return aTime - bTime;
+  });
+
+  for (const msg of sorted) {
+    if (msg.role !== "assistant") continue;
+    const blocks = extractTraceBlocks(msg);
+    if (!Array.isArray(blocks)) continue;
+
+    for (const block of blocks) {
+      if (String(block.type ?? "") !== "tool_result") continue;
+      const resultPayload = parseToolResultObject(block.content ?? block.result);
+      if (!resultPayload) continue;
+      const toolName = normalizeToolName(block.name);
+      graph = mergeKgGraphWithResult(graph, toolName, resultPayload);
+    }
+  }
+
+  return graph;
+}
+
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   if (action.type === "RESET") {
     return { ...initialChatState, threadId: action.threadId };
@@ -467,7 +485,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     return {
       ...state,
       turns,
-      kgGraph: rebuildKgGraphFromTurns(turns),
+      kgGraph: rebuildKgGraphFromMessages(action.messages),
       error: null,
     };
   }
@@ -812,18 +830,22 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case "main_agent_tool_result": {
-      if (event.parent_tool_use_id) return baseState;
-      if (!isUiVisible(event.ui_visible)) return baseState;
-      if (event.tool_name === "repl_exec") return baseState;
+      const resultPayload = parseToolResultObject(event.result) ?? {};
+      const eventToolName = normalizeToolName(event.tool_name);
+      const nextKgGraph = mergeKgGraphWithResult(baseState.kgGraph, eventToolName, resultPayload);
+      const kgOnlyState = nextKgGraph === baseState.kgGraph ? baseState : { ...baseState, kgGraph: nextKgGraph };
+
+      if (event.parent_tool_use_id) return kgOnlyState;
+      if (!isUiVisible(event.ui_visible)) return kgOnlyState;
+      if (event.tool_name === "repl_exec") return kgOnlyState;
       const ensured = ensureTurn(baseState.turns, runId);
       const nextTurns = [...ensured.turns];
       const target = nextTurns[ensured.index];
       const toolUseId = event.tool_use_id ?? `tool-${runId ?? "norun"}-${event.segment_index ?? 0}`;
       const stepId = `tool-${toolUseId}`;
       const existing = target.workSteps.find((step) => step.id === stepId);
-      const resultPayload = parseToolResultObject(event.result) ?? {};
       const toolName = existing?.toolName ?? event.tool_name;
-      if (!isDisplayableTopLevelToolName(toolName)) return baseState;
+      if (!isDisplayableTopLevelToolName(toolName)) return kgOnlyState;
       if (toolName === "bash_exec") {
         const output = asRecord(resultPayload.output);
         const statusRaw = String(resultPayload.status ?? "");
@@ -847,13 +869,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           result: resultPayload,
         });
         nextTurns[ensured.index] = target;
-        return { ...baseState, turns: nextTurns };
+        return nextKgGraph === baseState.kgGraph
+          ? { ...baseState, turns: nextTurns }
+          : { ...baseState, turns: nextTurns, kgGraph: nextKgGraph };
       }
       const nextStatus =
         resultPayload.status === "success" || resultPayload.status === "completed"
           ? "done"
           : "error";
-      const resolvedToolName = existing?.toolName ?? event.tool_name;
       target.workSteps = upsertWorkStep(target.workSteps, {
         id: stepId,
         kind: "tool",
@@ -864,8 +887,6 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         toolName,
       });
       nextTurns[ensured.index] = target;
-
-      const nextKgGraph = mergeKgGraphWithResult(baseState.kgGraph, resolvedToolName, resultPayload);
       return { ...baseState, turns: nextTurns, kgGraph: nextKgGraph };
     }
 

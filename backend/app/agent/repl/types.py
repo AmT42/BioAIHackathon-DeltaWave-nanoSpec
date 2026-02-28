@@ -4,6 +4,15 @@ from dataclasses import dataclass
 from typing import Any, Iterator, Sequence
 
 
+class RecordRow(dict):
+    """Dict row with attribute-style read access for REPL ergonomics."""
+
+    def __getattr__(self, name: str) -> Any:
+        if name in self:
+            return self[name]
+        raise AttributeError(name)
+
+
 class IdListHandle(Sequence[str]):
     """Lazy-ish ID collection wrapper with compact repr for REPL usage."""
 
@@ -76,11 +85,24 @@ class ToolResultHandle:
         value = data.get(key)
         if not isinstance(value, list):
             return []
-        return [item for item in value if isinstance(item, dict)]
+        return [RecordRow(item) for item in value if isinstance(item, dict)]
 
     @property
     def records(self) -> list[dict[str, Any]]:
-        return self._as_records("records")
+        direct = self._as_records("records")
+        if direct:
+            return direct
+        candidates = self._as_records("candidates")
+        if candidates:
+            return candidates
+        return self._as_records("hits")
+
+    @property
+    def candidates(self) -> list[dict[str, Any]]:
+        direct = self._as_records("candidates")
+        if direct:
+            return direct
+        return self.records
 
     @property
     def items(self) -> list[dict[str, Any]]:

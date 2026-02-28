@@ -50,6 +50,8 @@ def create_science_registry(settings: Settings) -> ToolRegistry:
         tools.extend(build_longevity_tools(http))
     if settings.enable_optional_source_tools:
         tools.extend(build_optional_source_tools(settings, http))
+    if settings.enable_kg_tools:
+        tools.extend(build_kg_tools(settings))
     tools.extend(build_evidence_tools())
 
     return ToolRegistry(

@@ -69,7 +69,14 @@ Argument calibration rules:
 - Keep limits conservative unless additional coverage is needed.
 
 KG efficiency guardrails:
-- For `kg_query`, prefer connected subgraph outputs over isolated node lists and favor graph-enrichment oriented retrieval.
+- Start with a schema-aware KG discovery pass when intervention intent is broad or unspecified:
+  - draft explicit read-only Cypher in REPL first to map what relation families exist around the intervention in this KG.
+  - execute with `kg_cypher_execute`, then iteratively refine Cypher from observed rows.
+- Do not hard-filter the first KG pass to outcome keywords (for example "aging", "longevity", "senescence") unless the user explicitly asks for that scope.
+- Use diversity-first KG exploration for intervention understanding:
+  - target coverage across multiple node/edge families, not a single pathway.
+  - in early KG passes, aim for at least 4 distinct node types and 4 distinct relation types when available.
+  - if coverage is narrow, run additional anchored passes using newly discovered entities (proteins, diseases, interacting drugs, pathways).
 - When graph traversal/mapping is requested, prefer explicit 2-hop chains (A->B->C) with both edges returned, then expand with follow-up neighborhood passes.
 - Use `top_k` in the 25-60 range for enrichment passes (or start at 25 and expand as needed) to improve connected coverage.
 - For >=3-hop exploration, use sequential anchored queries and preserve overlap nodes so results can be stitched into a larger traversable graph.
@@ -77,7 +84,7 @@ KG efficiency guardrails:
 Source trust hierarchy:
 - Primary clinical evidence: PubMed + ClinicalTrials.gov.
 - Core normalization: RxNorm, PubChem, OLS.
-- Mechanistic grounding: CROssBAR Knowledge Graph (kg_query).
+- Mechanistic grounding: CROssBAR Knowledge Graph (use REPL-authored Cypher + `kg_cypher_execute`).
 - Core enrichment: DailyMed/openFDA, DrugAge, ITP.
 - Optional enrichment: OpenAlex, Semantic Scholar, ChEMBL, ChEBI, Epistemonikos.
 
@@ -180,20 +187,31 @@ Then enforce synonym discipline:
   - likely to explode recall (broad class terms).
 - Keep class/related terms in a separate list for optional recall expansion.
 
-### Step 2B — KG-guided term expansion (mandatory when KG is available)
-- Run `kg_query` using the preferred intervention label and key synonyms from Step 2.
-- Prefer connected 1-hop/2-hop rows that expose bridge entities relevant to retrieval:
+### Step 2B — KG neighborhood mapping and term expansion (mandatory when KG is available)
+- First, draft and run a schema-aware discovery Cypher in REPL with `kg_cypher_execute` to get a general intervention neighborhood (no narrow outcome keyword filter unless explicitly requested by the user).
+- Then run targeted read-only follow-up Cypher queries (still authored in REPL) using discovered relation families and connected 1-hop/2-hop paths.
+- For graph visualization/traversal, always return relationship variables and key relationship fields for each hop (not only node columns).
+- Prefer coverage across relation families relevant to intervention understanding:
   - targets/genes/proteins,
-  - pathways/processes/mechanisms,
-  - diseases/phenotypes.
+  - diseases/phenotypes/indications,
+  - drug-drug interactions and side effects/safety context,
+  - pathways/processes/mechanisms.
+- For each KG pass, inspect returned `coverage` and relation/node type summaries; if diversity is low, explicitly query underrepresented relation families in the next pass.
 - Extract candidate KG terms from returned rows and keep only terms that are:
-  - directly connected to the intervention in the returned graph rows,
+  - directly connected to the intervention in returned graph rows,
   - specific (not generic boilerplate terms),
   - repeated across rows or otherwise clearly supported by relation evidence.
 - Build bounded KG seed buckets for downstream search:
   - `kg_target_mechanism_terms` (suggested 3-8 terms),
   - `kg_disease_phenotype_terms` (suggested 3-8 terms),
-  - `kg_pathway_process_terms` (suggested 3-8 terms).
+  - `kg_pathway_process_terms` (suggested 3-8 terms),
+  - `kg_drug_interaction_terms` (suggested 2-6 terms when applicable).
+- If KG coverage remains sparse, enrich anchors from non-KG database calls and loop back into KG:
+  - use DailyMed/openFDA for safety/interaction terms,
+  - use ClinicalTrials.gov conditions/interventions,
+  - use PubMed high-signal terms (entities repeatedly appearing with intervention),
+  then rerun `kg_cypher_execute` with those anchors.
+- If the user question is explicitly longevity-focused, add a secondary filtered KG pass for aging/longevity/senescence terms after the general neighborhood pass.
 - If KG returns sparse/no useful terms, continue with Step 2 terms and state this explicitly in limitations.
 
 ### Step 3 — Retrieve evidence hierarchy-first

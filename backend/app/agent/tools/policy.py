@@ -86,11 +86,11 @@ def classify_intervention_hint(query: str) -> str:
 def recommend_initial_tools_for_query(query: str) -> list[str]:
     category = classify_intervention_hint(query)
     if category == "drug":
-        return ["normalize_drug", "kg_query", "pubmed_search", "clinicaltrials_search"]
+        return ["normalize_drug", "kg_cypher_execute", "pubmed_search", "clinicaltrials_search"]
     if category == "supplement_or_chemical":
-        return ["normalize_compound", "kg_query", "pubmed_search", "clinicaltrials_search"]
+        return ["normalize_compound", "kg_cypher_execute", "pubmed_search", "clinicaltrials_search"]
     if category == "procedure_or_lifestyle":
-        return ["normalize_ontology", "kg_query", "pubmed_search", "clinicaltrials_search"]
+        return ["normalize_ontology", "kg_cypher_execute", "pubmed_search", "clinicaltrials_search"]
     if category == "disease_or_phenotype":
-        return ["normalize_ontology", "kg_query", "pubmed_search", "clinicaltrials_search"]
-    return ["normalize_ontology", "kg_query", "pubmed_search", "clinicaltrials_search"]
+        return ["normalize_ontology", "kg_cypher_execute", "pubmed_search", "clinicaltrials_search"]
+    return ["normalize_ontology", "kg_cypher_execute", "pubmed_search", "clinicaltrials_search"]

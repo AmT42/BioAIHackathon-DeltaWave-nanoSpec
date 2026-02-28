@@ -90,6 +90,56 @@ def _echo_registry() -> ToolRegistry:
     )
 
 
+def _alias_registry() -> ToolRegistry:
+    def dailymed_fetch_sections(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        return make_tool_output(
+            source="test",
+            summary="dailymed",
+            data={"payload": payload},
+            ctx=ctx,
+        )
+
+    def clinicaltrials_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        return make_tool_output(
+            source="test",
+            summary="trials",
+            data={"payload": payload},
+            ctx=ctx,
+        )
+
+    return ToolRegistry(
+        [
+            ToolSpec(
+                name="dailymed_fetch_sections",
+                description="DailyMed fetch alias test.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "ids": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["ids"],
+                },
+                handler=dailymed_fetch_sections,
+                source="test",
+            ),
+            ToolSpec(
+                name="clinicaltrials_search",
+                description="CT.gov query alias test.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "intervention": {"type": "string"},
+                        "condition": {"type": "string"},
+                    },
+                },
+                handler=clinicaltrials_search,
+                source="test",
+            ),
+        ]
+    )
+
+
 def _merge_registry() -> ToolRegistry:
     def normalize_ontology(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
         return make_tool_output(
@@ -449,6 +499,23 @@ def test_tool_result_handle_records_iteration_and_shape() -> None:
     assert shape["records_count"] == 2
 
 
+def test_tool_result_handle_supports_candidates_and_attribute_access() -> None:
+    handle = ToolResultHandle(
+        tool_name="normalize_drug",
+        payload={
+            "summary": "ok",
+            "ids": ["123"],
+            "data": {"candidates": [{"name": "Dasatinib", "rxcui": "123"}]},
+        },
+        raw_result={"status": "success"},
+    )
+
+    assert len(handle.candidates) == 1
+    assert handle.candidates[0].name == "Dasatinib"
+    assert len(handle.records) == 1
+    assert handle.records[0]["rxcui"] == "123"
+
+
 def test_repl_merge_candidates_accepts_positional_handle_list() -> None:
     runtime = _runtime_with_tools(_merge_registry())
 
@@ -471,6 +538,43 @@ def test_repl_merge_candidates_accepts_positional_handle_list() -> None:
     assert "Hyperbaric oxygen therapy" in out.stdout
     assert "drug_candidates" in out.stdout
     assert "ontology_candidates" in out.stdout
+
+
+def test_repl_wrapper_maps_dailymed_setid_alias_to_ids() -> None:
+    runtime = _runtime_with_tools(_alias_registry())
+
+    out = runtime.execute(
+        thread_id="thread-o",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code="res = dailymed_fetch_sections(setid='abc123')\nprint(res.data['payload'])",
+    )
+
+    assert out.error is None
+    assert "'ids': ['abc123']" in out.stdout
+
+
+def test_repl_wrapper_maps_clinicaltrials_query_object_shape() -> None:
+    runtime = _runtime_with_tools(_alias_registry())
+
+    out = runtime.execute(
+        thread_id="thread-p",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code=(
+            "res = clinicaltrials_search(query={'term': 'dasatinib quercetin', 'intr': 'dasatinib', 'cond': 'frailty'})\n"
+            "print(res.data['payload'])"
+        ),
+    )
+
+    assert out.error is None
+    assert "'query': 'dasatinib quercetin'" in out.stdout
+    assert "'intervention': 'dasatinib'" in out.stdout
+    assert "'condition': 'frailty'" in out.stdout
 
 
 def test_repl_runtime_info_and_help_examples_helpers_available() -> None:

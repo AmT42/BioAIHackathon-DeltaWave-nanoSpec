@@ -415,6 +415,22 @@ class ReplBindings:
             normalized["ids"] = normalized.pop("nct_ids")
         if tool_name == "pubmed_search" and "term" in normalized and "query" not in normalized:
             normalized["query"] = normalized.pop("term")
+        if tool_name == "dailymed_fetch_sections" and "setid" in normalized and "ids" not in normalized:
+            setid = normalized.pop("setid")
+            normalized["ids"] = setid if isinstance(setid, list) else [setid]
+        if tool_name in {"clinicaltrials_search", "clinicaltrials_search_studies"} and isinstance(
+            normalized.get("query"), dict
+        ):
+            query_obj = normalized.pop("query")
+            term = query_obj.get("term") or query_obj.get("query")
+            intervention = query_obj.get("intr") or query_obj.get("intervention")
+            condition = query_obj.get("cond") or query_obj.get("condition")
+            if term and "query" not in normalized:
+                normalized["query"] = str(term)
+            if intervention and "intervention" not in normalized:
+                normalized["intervention"] = str(intervention)
+            if condition and "condition" not in normalized:
+                normalized["condition"] = str(condition)
 
         return normalized
 
@@ -816,6 +832,7 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
             "Use help_examples('longevity') and help_examples('shell_vs_repl') for safe workflow snippets.\n"
             "Call runtime_info() for Python/workspace/tool/shell policy details.\n"
             "Use env_vars() to inspect current user-defined REPL variables (name/type/preview).\n"
+            "Do not import from agent.tools.*; wrappers are already available as top-level functions.\n"
             "Search tools usually take query + limit (or term + retmax aliases).\n"
             "Fetch tools usually take ids (aliases pmids/nct_ids are accepted).\n"
             "Handles expose ids.head(n), shape(), records/items/studies convenience accessors.\n"
@@ -1046,7 +1063,8 @@ class ReplRuntime:
                 return builtins.__import__(module_name, globals_map, locals_map, fromlist, level)
             raise ImportError(
                 f"Import '{module_name}' is allowed but '{missing}' is not installed. "
-                "Use bash_exec to install dependencies or rely on available wrappers."
+                "Use bash_exec to install dependencies, or call preloaded wrappers directly "
+                "(for example: kg_cypher_execute(...), normalize_merge_candidates(...))."
             ) from exc
 
     def _snapshot_scope(self, session: ReplSessionState) -> dict[str, Any]:

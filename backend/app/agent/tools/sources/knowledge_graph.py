@@ -60,10 +60,16 @@ e.g. WHERE toLower(n.name) CONTAINS toLower('user input')
 - Users may use common/trade names. Map them to generic names when obvious \
 (e.g. rapamycin -> sirolimus, aspirin -> Acetylsalicylic acid, \
 tylenol -> Acetaminophen).
+- For broad intervention-discovery questions, avoid premature domain keyword filters \
+(for example aging/longevity/senescence) unless the user explicitly asks for them.
 - If returning nodes/entities, include their `id` and `name` in RETURN.
 - ALWAYS assign a variable to relationships (e.g. -[r:REL_TYPE]-) and include \
 relevant relationship properties in RETURN. Check the "Relationship properties" \
 section for available properties on each relationship type.
+- If the user asks for a general understanding of an intervention, prioritize \
+connected rows that cover diverse relation families around the intervention \
+(targets, diseases/phenotypes, drug-drug interactions/side effects, pathways/processes) \
+before narrowing to one outcome domain.
 - Prefer stable RETURN aliases for flat projections (e.g., `drug_id`, `drug_name`, \
 `protein_id`, `protein_name`) instead of ambiguous bare fields like `name`.
 - Prefer connected graph rows: return node-relation-node tuples, not standalone node lists.
@@ -508,7 +514,7 @@ def _generate_cypher_via_gemini(question: str, schema: dict[str, Any], api_key: 
 
     client = genai.Client(api_key=api_key)
     resp = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.1-pro-preview",
         contents=prompt,
         config={"temperature": 0.0},
     )
@@ -1212,7 +1218,7 @@ def _extract_subgraph_from_records(records: list[dict[str, Any]]) -> tuple[dict[
         node_count_before = len(node_wrappers)
         rel_count_before = len(rel_wrappers)
         _collect_wrapped_graph_values(row, node_wrappers=node_wrappers, rel_wrappers=rel_wrappers)
-        if len(node_wrappers) == node_count_before and len(rel_wrappers) == rel_count_before:
+        if len(rel_wrappers) == rel_count_before:
             _collect_inferred_graph_values_from_flat_row(row, node_wrappers=node_wrappers, rel_wrappers=rel_wrappers)
 
     nodes_by_key: dict[str, dict[str, Any]] = {}
@@ -1282,6 +1288,16 @@ def _build_canonical_subgraph(records: list[dict[str, Any]]) -> dict[str, Any]:
             str(row.get("target", "")),
         ),
     )
+    node_type_counts: dict[str, int] = {}
+    for node in nodes:
+        node_type = str(node.get("node_type", "Unknown") or "Unknown")
+        node_type_counts[node_type] = node_type_counts.get(node_type, 0) + 1
+
+    relation_type_counts: dict[str, int] = {}
+    for edge in canonical_edges:
+        rel_type = str(edge.get("type", "RELATED_TO") or "RELATED_TO")
+        relation_type_counts[rel_type] = relation_type_counts.get(rel_type, 0) + 1
+
     return {
         "summary": {
             "node_count": len(nodes),
@@ -1289,6 +1305,14 @@ def _build_canonical_subgraph(records: list[dict[str, Any]]) -> dict[str, Any]:
         },
         "nodes": nodes,
         "edges": canonical_edges,
+        "coverage": {
+            "node_type_count": len(node_type_counts),
+            "relation_type_count": len(relation_type_counts),
+            "node_type_counts": dict(sorted(node_type_counts.items(), key=lambda item: item[0])),
+            "relation_type_counts": dict(sorted(relation_type_counts.items(), key=lambda item: item[0])),
+            "node_types": sorted(node_type_counts.keys()),
+            "relation_types": sorted(relation_type_counts.keys()),
+        },
     }
 
 
@@ -1517,7 +1541,7 @@ def _require_gemini_key(settings: Any) -> str:
 
 
 def build_kg_tools(settings: Any) -> list[ToolSpec]:
-    """Build the kg_query and kg_cypher_execute tool specs."""
+    """Build KG tool specs exposed to the agent runtime."""
     schema = _load_schema()
     edges = schema.get("edges", [])
 
@@ -1574,10 +1598,19 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
         warnings: list[str] = []
         subgraph = _build_canonical_subgraph(rows)
         data["subgraph"] = subgraph
+        data["coverage"] = subgraph.get("coverage", {})
         if include_node_stats:
             data["node_stats"] = _build_query_local_node_stats(rows, top_n_per_type=top_n_per_type)
         if rows and int(((subgraph.get("summary") or {}).get("node_count") or 0)) == 0:
             warnings.append("KG rows returned but no graph entities could be inferred for subgraph/node_stats.")
+        if rows:
+            node_count = int(((subgraph.get("summary") or {}).get("node_count") or 0))
+            edge_count = int(((subgraph.get("summary") or {}).get("edge_count") or 0))
+            if node_count > 0 and edge_count == 0:
+                warnings.append(
+                    "KG rows returned nodes but no relationships. Include relationship variables/properties in RETURN "
+                    "(for example r1/r2, type(r1), r1.confidence_score) to build graph edges."
+                )
 
         summary = f"KG query returned {len(rows)} records" if rows else "KG query returned no results"
         return make_tool_output(
@@ -1631,10 +1664,19 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
         warnings: list[str] = []
         subgraph = _build_canonical_subgraph(rows)
         data["subgraph"] = subgraph
+        data["coverage"] = subgraph.get("coverage", {})
         if include_node_stats:
             data["node_stats"] = _build_query_local_node_stats(rows, top_n_per_type=top_n_per_type)
         if rows and int(((subgraph.get("summary") or {}).get("node_count") or 0)) == 0:
             warnings.append("Cypher rows returned but no graph entities could be inferred for subgraph/node_stats.")
+        if rows:
+            node_count = int(((subgraph.get("summary") or {}).get("node_count") or 0))
+            edge_count = int(((subgraph.get("summary") or {}).get("edge_count") or 0))
+            if node_count > 0 and edge_count == 0:
+                warnings.append(
+                    "Cypher rows returned nodes but no relationships. Include relationship variables/properties in RETURN "
+                    "(for example r1/r2, type(r1), r1.confidence_score) to build graph edges."
+                )
 
         summary = f"Cypher returned {len(rows)} records" if rows else "Cypher returned no results"
         return make_tool_output(
@@ -1719,12 +1761,12 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
             "Best for explicit connected path queries (including two-hop traversals and enrichment-focused neighborhood expansion).",
             when=[
                 "user provides an explicit Cypher query to run",
-                "need to run a follow-up or refined query after inspecting kg_query results",
+                "need to iteratively refine explicit Cypher traversal while inspecting returned rows",
                 "need to control exact connected path shape for graph mapping/traversal",
                 "need to deliberately expand local graph neighborhoods while preserving connectedness",
             ],
             avoid=[
-                "when user asks a natural-language question (use kg_query instead)",
+                "when query intent requires graph mutations (only read-only Cypher is allowed)",
             ],
             critical_args=["cypher (str, required): the Cypher query to execute"],
             returns="record_list with the executed cypher and matching connected records from the knowledge graph",
@@ -1772,4 +1814,4 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
         source="crossbar_kg",
     )
 
-    return [kg_query_spec, kg_cypher_spec]
+    return [kg_cypher_spec]
