@@ -16,6 +16,29 @@ from app.persistence.service import ChatStore
 router = APIRouter(tags=["chat"])
 
 
+def _is_disconnect_error(exc: BaseException) -> bool:
+    if isinstance(exc, WebSocketDisconnect):
+        return True
+    if exc.__class__.__name__ == "ClientDisconnected":
+        return True
+    if isinstance(exc, RuntimeError) and "close message has been sent" in str(exc):
+        return True
+    cause = getattr(exc, "__cause__", None)
+    if isinstance(cause, BaseException):
+        return _is_disconnect_error(cause)
+    return False
+
+
+async def _safe_send_json(websocket: WebSocket, payload: dict[str, Any]) -> bool:
+    try:
+        await websocket.send_json(payload)
+        return True
+    except Exception as exc:
+        if _is_disconnect_error(exc):
+            return False
+        raise
+
+
 class CreateThreadResponse(BaseModel):
     thread_id: str
 
@@ -161,7 +184,7 @@ async def ws_chat(
     try:
         provider_name = normalize_provider(provider)
     except ValueError as exc:
-        await websocket.send_json({"type": "main_agent_error", "error": str(exc)})
+        await _safe_send_json(websocket, {"type": "main_agent_error", "error": str(exc)})
         await websocket.close(code=1008)
         return
 
@@ -176,17 +199,20 @@ async def ws_chat(
             msg_type = str(incoming.get("type", "")).strip().lower()
 
             if msg_type == "ping":
-                await websocket.send_json({"type": "pong"})
+                if not await _safe_send_json(websocket, {"type": "pong"}):
+                    return
                 continue
 
             if msg_type not in {"main_agent_chat", "user_message"}:
-                await websocket.send_json(
+                if not await _safe_send_json(
+                    websocket,
                     {
                         "type": "main_agent_error",
                         "thread_id": resolved_thread_id,
                         "error": "Unsupported message type",
-                    }
-                )
+                    },
+                ):
+                    return
                 continue
 
             content = str(
@@ -196,13 +222,15 @@ async def ws_chat(
                 or ""
             ).strip()
             if not content:
-                await websocket.send_json(
+                if not await _safe_send_json(
+                    websocket,
                     {
                         "type": "main_agent_error",
                         "thread_id": resolved_thread_id,
                         "error": "Empty content",
-                    }
-                )
+                    },
+                ):
+                    return
                 continue
 
             async with SessionLocal() as run_session:
@@ -210,7 +238,8 @@ async def ws_chat(
                 core = AgentCore(settings=settings, store=run_store, tools=create_science_registry(settings))
 
                 async def emit(event: dict[str, Any]) -> None:
-                    await websocket.send_json(event)
+                    if not await _safe_send_json(websocket, event):
+                        raise WebSocketDisconnect(code=1001)
 
                 try:
                     await core.run_turn_stream(
@@ -221,13 +250,17 @@ async def ws_chat(
                         run_id=uuid.uuid4().hex,
                     )
                 except Exception as exc:
-                    await websocket.send_json(
+                    if _is_disconnect_error(exc):
+                        return
+                    if not await _safe_send_json(
+                        websocket,
                         {
                             "type": "main_agent_error",
                             "thread_id": resolved_thread_id,
                             "run_id": "error",
                             "error": str(exc),
-                        }
-                    )
+                        },
+                    ):
+                        return
     except WebSocketDisconnect:
         return

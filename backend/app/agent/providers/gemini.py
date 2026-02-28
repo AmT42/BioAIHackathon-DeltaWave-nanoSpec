@@ -107,6 +107,10 @@ def _extract_tool_signature(tool_call: dict[str, Any]) -> str | None:
     return None
 
 
+def _format_history_tool_output_fallback(tool_name: str, response_payload: dict[str, Any]) -> str:
+    return f"Historical tool output ({tool_name}):\n{_coerce_text(response_payload)}"
+
+
 def _extract_parts_from_chunk(chunk: Any) -> list[Any]:
     chunk_dict = _as_dict(chunk) if not isinstance(chunk, dict) else chunk
     candidates = None
@@ -434,6 +438,7 @@ class GeminiProvider(ProviderClient):
         unsigned_history_tool_calls = 0
         emitted_function_call_ids: set[str] = set()
         tool_name_by_id: dict[str, str] = {}
+        skipped_unsigned_function_call_ids: set[str] = set()
 
         for raw_msg in messages:
             if not isinstance(raw_msg, dict):
@@ -482,11 +487,8 @@ class GeminiProvider(ProviderClient):
 
                         if require_signature and not thought_signature:
                             unsigned_history_tool_calls += 1
-                            fallback = (
-                                "[tool_call_without_thought_signature] "
-                                f"{tool_name}({_coerce_text(parsed_input)})"
-                            )
-                            parts.append(self._build_text_part(fallback, genai_types=genai_types))
+                            if tc_id:
+                                skipped_unsigned_function_call_ids.add(tc_id)
                             continue
 
                         parts.append(
@@ -531,8 +533,10 @@ class GeminiProvider(ProviderClient):
                         genai_types=genai_types,
                     )
                     contents.append(self._build_content(role="user", parts=[part], genai_types=genai_types))
+                elif tool_call_id_str and tool_call_id_str in skipped_unsigned_function_call_ids:
+                    continue
                 else:
-                    fallback_text = f"[tool_output]\n{_coerce_text(response_payload)}"
+                    fallback_text = _format_history_tool_output_fallback(tool_name, response_payload)
                     text_part = self._build_text_part(fallback_text, genai_types=genai_types)
                     contents.append(self._build_content(role="user", parts=[text_part], genai_types=genai_types))
                 continue
@@ -676,7 +680,7 @@ class GeminiProvider(ProviderClient):
 
         if unsigned_history_tool_calls:
             logger.warning(
-                "Skipped %d unsigned Gemini historical function call(s) and downgraded them to text fallback.",
+                "Skipped %d unsigned Gemini historical function call(s) from replay due missing thought_signature.",
                 unsigned_history_tool_calls,
             )
 

@@ -329,10 +329,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const target = nextTurns[ensured.index];
       const stepId = `thinking-${runId ?? "norun"}-${event.segment_index ?? 0}`;
       const existing = target.workSteps.find((step) => step.id === stepId);
+      const finalSummary =
+        typeof event.summary === "string" && event.summary.trim().length > 0
+          ? event.summary
+          : existing?.text ?? "";
       target.workSteps = upsertWorkStep(target.workSteps, {
         id: stepId,
         kind: "thinking",
-        text: existing?.text || event.summary || "",
+        text: finalSummary,
         status: "done",
         segmentIndex: event.segment_index,
       });

@@ -147,7 +147,7 @@ def _normalize_claude_adjacency(
             normalized.append(
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": f"[tool_output]\\n{payload}"}],
+                    "content": [{"type": "text", "text": f"Historical tool output:\\n{payload}"}],
                 }
             )
 
@@ -387,7 +387,7 @@ def build_gemini_openai_messages(
                     tool_msg["name"] = event.content.get("tool_name")
                 messages.append(tool_msg)
             else:
-                messages.append({"role": "assistant", "content": f"[tool_output]\\n{payload_text}"})
+                messages.append({"role": "assistant", "content": f"Historical tool output:\\n{payload_text}"})
 
     flush_tool_calls()
     return messages

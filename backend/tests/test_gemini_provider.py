@@ -233,7 +233,8 @@ def test_gemini_provider_downgrades_unsigned_history_tool_calls(monkeypatch: pyt
         for part in message.get("parts", [])
         if isinstance(part, dict) and isinstance(part.get("text"), str)
     ]
-    assert any("[tool_call_without_thought_signature]" in value for value in fallback_text_parts)
+    assert all("Historical tool call:" not in value for value in fallback_text_parts)
+    assert all("Historical tool output (" not in value for value in fallback_text_parts)
     assert result.provider_state["unsigned_history_tool_call_count"] == 1
 
 
