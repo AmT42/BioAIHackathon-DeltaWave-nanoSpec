@@ -23,6 +23,7 @@ DEFAULT_EXCLUDED_DIRS = {
     ".hg",
     ".svn",
     ".venv",
+    ".venv_local",
     "venv",
     "__pycache__",
     ".pytest_cache",
@@ -35,6 +36,12 @@ DEFAULT_EXCLUDED_DIRS = {
     "coverage",
     ".idea",
     ".vscode",
+    # Runtime/data directories that can explode export size.
+    "logs",
+    "log",
+    "artifacts",
+    "tmp",
+    "temp",
 }
 
 DEFAULT_EXCLUDED_GLOBS = {
@@ -66,16 +73,24 @@ DEFAULT_EXCLUDED_GLOBS = {
     "*.ogg",
     "*.bin",
     "*.log",
+    "*.json",
+    "*.jsonl",
+    "*.ndjson",
     "*.sqlite",
     "*.db",
     ".DS_Store",
 }
 
+# JSON exports are excluded by default to avoid including runtime traces.
+DEFAULT_JSON_GLOBS = {"*.json", "*.jsonl", "*.ndjson"}
+
 # "Without package" defaults: package/lock/dependency descriptor files.
 DEFAULT_EXCLUDED_PACKAGE_FILES = {
     "package.json",
     "package-lock.json",
+    "npm-shrinkwrap.json",
     "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
     "yarn.lock",
     "bun.lockb",
     "pyproject.toml",
@@ -138,6 +153,11 @@ def parse_args() -> argparse.Namespace:
         help="Include package/lock files (excluded by default).",
     )
     parser.add_argument(
+        "--include-json-files",
+        action="store_true",
+        help="Include JSON/JSONL/NDJSON files (excluded by default).",
+    )
+    parser.add_argument(
         "--exclude-dir",
         action="append",
         default=[],
@@ -197,6 +217,8 @@ def main() -> int:
 
     excluded_globs = set(DEFAULT_EXCLUDED_GLOBS)
     excluded_globs.update(args.exclude_glob)
+    if args.include_json_files:
+        excluded_globs.difference_update(DEFAULT_JSON_GLOBS)
 
     excluded_package_files = (
         set()

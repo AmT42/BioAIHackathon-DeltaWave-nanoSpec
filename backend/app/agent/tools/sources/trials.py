@@ -23,6 +23,17 @@ def _safe_int(value: Any, default: int) -> int:
         return default
 
 
+def _openalex_auth_params(settings: Settings) -> dict[str, str]:
+    params: dict[str, str] = {}
+    api_key = str(settings.openalex_api_key or "").strip()
+    mailto = str(settings.openalex_mailto or "").strip()
+    if api_key:
+        params["api_key"] = api_key
+    if mailto:
+        params["mailto"] = mailto
+    return params
+
+
 def _parse_trial_date(value: Any) -> datetime | None:
     raw = str(value or "").strip()
     if not raw:
@@ -266,14 +277,15 @@ def build_trial_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSp
             pmids = strict_pmids or fallback_pmids
 
             openalex_ids: list[str] = []
-            if settings.openalex_api_key:
+            openalex_auth = _openalex_auth_params(settings)
+            if openalex_auth:
                 try:
                     oa_data, _ = http.get_json(
                         url="https://api.openalex.org/works",
                         params={
                             "search": nct,
                             "per-page": openalex_per_nct,
-                            "api_key": settings.openalex_api_key,
+                            **openalex_auth,
                         },
                     )
                     for work in list((oa_data or {}).get("results") or []):
@@ -298,9 +310,9 @@ def build_trial_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSp
 
                 if completed and not has_pubmed_publication:
                     if completion_date and _is_older_than(completion_date, evidence_age_days):
-                        flag = "possible_unpublished_completed_trial"
+                        flag = "completed_but_unpublished_possible"
                     elif not completion_date:
-                        flag = "insufficient_trial_context"
+                        flag = "completed_but_unpublished_possible"
                 elif has_results and not has_pubmed_publication:
                     flag = "registry_results_without_publication"
                 elif has_pubmed_publication and not status:
@@ -349,6 +361,7 @@ def build_trial_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSp
             input_schema={
                 "type": "object",
                 "properties": {
+                    "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
                     "query": {"type": "string"},
                     "intervention": {"type": "string"},
                     "condition": {"type": "string"},

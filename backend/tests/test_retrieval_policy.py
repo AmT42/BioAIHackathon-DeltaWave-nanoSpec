@@ -23,7 +23,7 @@ def test_optional_rate_limit_does_not_fail_strict() -> None:
     summary = summarize_strict_results(
         [
             _row("pubmed_fetch", "success"),
-            _row("semanticscholar_search_papers", "error", code="RATE_LIMIT"),
+            _row("chembl_search", "error", code="RATE_LIMIT"),
         ]
     )
 
@@ -36,7 +36,7 @@ def test_core_failure_fails_strict() -> None:
     summary = summarize_strict_results(
         [
             _row("pubmed_fetch", "error", code="UPSTREAM_ERROR"),
-            _row("semanticscholar_search_papers", "error", code="UNCONFIGURED"),
+            _row("chembl_search", "error", code="UNCONFIGURED"),
         ]
     )
 

@@ -485,6 +485,34 @@ class GeminiProvider(ProviderClient):
                     pass
         return {"role": role, "parts": parts}
 
+    def _sanitize_schema_for_gemini(self, node: Any) -> Any:
+        if isinstance(node, list):
+            return [self._sanitize_schema_for_gemini(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+
+        out: dict[str, Any] = {}
+        for key, value in node.items():
+            if key == "type" and isinstance(value, list):
+                type_candidates = [str(item).strip().lower() for item in value if str(item).strip()]
+                if "object" in type_candidates:
+                    out[key] = "object"
+                elif "array" in type_candidates:
+                    out[key] = "array"
+                elif "string" in type_candidates:
+                    out[key] = "string"
+                elif "integer" in type_candidates:
+                    out[key] = "integer"
+                elif "number" in type_candidates:
+                    out[key] = "number"
+                elif "boolean" in type_candidates:
+                    out[key] = "boolean"
+                elif "null" in type_candidates:
+                    out[key] = "null"
+                continue
+            out[key] = self._sanitize_schema_for_gemini(value)
+        return out
+
     def _build_tool_config(self, *, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         declarations: list[dict[str, Any]] = []
         for schema in tools:
@@ -499,7 +527,9 @@ class GeminiProvider(ProviderClient):
             declaration: dict[str, Any] = {
                 "name": name.strip(),
                 "description": str(fn.get("description") or "").strip(),
-                "parameters": fn.get("parameters") or {"type": "object", "properties": {}},
+                "parameters": self._sanitize_schema_for_gemini(
+                    fn.get("parameters") or {"type": "object", "properties": {}}
+                ),
             }
             declarations.append(declaration)
         if not declarations:

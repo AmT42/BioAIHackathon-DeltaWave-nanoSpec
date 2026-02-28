@@ -11,7 +11,6 @@ def _registry():
         get_settings(),
         mock_llm=True,
         openalex_api_key="oa-key",
-        epistemonikos_api_key="epi-key",
         enable_builtin_demo_tools=False,
     )
     return create_science_registry(settings)
@@ -41,8 +40,6 @@ def test_search_tools_expose_query_mode_and_limit_bounds() -> None:
         "longevity_drugage_query",
         "chembl_search",
         "chebi_search",
-        "semanticscholar_search",
-        "epistemonikos_search",
     }
 
     by_name = {schema["function"]["name"]: schema["function"]["parameters"] for schema in _registry().openai_schemas()}
@@ -70,8 +67,6 @@ def test_fetch_tools_require_ids() -> None:
         "longevity_itp_fetch_summary",
         "chembl_fetch",
         "chebi_fetch",
-        "semanticscholar_fetch",
-        "epistemonikos_fetch",
     }
     by_name = {schema["function"]["name"]: schema["function"]["parameters"] for schema in _registry().openai_schemas()}
     for name in fetch_tool_names:

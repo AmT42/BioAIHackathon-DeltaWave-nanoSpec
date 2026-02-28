@@ -13,7 +13,6 @@ def _settings(tmp_path: Path):
         get_settings(),
         mock_llm=True,
         openalex_api_key="test-key",
-        epistemonikos_api_key="epi-key",
         artifacts_root=tmp_path / "artifacts",
         source_cache_root=tmp_path / "artifacts" / "cache" / "sources",
         enable_literature_tools=True,
@@ -23,7 +22,7 @@ def _settings(tmp_path: Path):
     )
 
 
-def test_science_registry_contains_core_and_pipeline_tools(tmp_path: Path) -> None:
+def test_science_registry_contains_core_and_evidence_tools(tmp_path: Path) -> None:
     registry = create_science_registry(_settings(tmp_path))
     names = {schema["function"]["name"] for schema in registry.openai_schemas()}
 
@@ -47,24 +46,19 @@ def test_science_registry_contains_core_and_pipeline_tools(tmp_path: Path) -> No
     assert "evidence_grade" in names
     assert "evidence_gap_map" in names
     assert "evidence_render_report" in names
-    assert "evidence_retrieve_bundle" in names
-    assert "evidence_grade_bundle" in names
-    assert "evidence_generate_report" in names
 
 
 def test_science_registry_omits_key_gated_tools_without_keys(tmp_path: Path) -> None:
     settings = replace(
         _settings(tmp_path),
         openalex_api_key=None,
-        epistemonikos_api_key=None,
+        openalex_mailto=None,
     )
     registry = create_science_registry(settings)
     names = {schema["function"]["name"] for schema in registry.openai_schemas()}
 
     assert "openalex_search_works" not in names
     assert "openalex_get_works" not in names
-    assert "epistemonikos_search_reviews" not in names
-    assert "epistemonikos_get_review" not in names
     assert "pubmed_esearch" in names
 
 

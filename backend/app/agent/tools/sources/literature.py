@@ -22,14 +22,21 @@ def _request_id(headers: dict[str, str]) -> str | None:
     return headers.get("x-request-id") or headers.get("x-amzn-requestid")
 
 
-def _ensure_openalex_key(settings: Settings) -> str:
-    if not settings.openalex_api_key:
-        raise ToolExecutionError(
-            code="UNCONFIGURED",
-            message="OPENALEX_API_KEY is required for OpenAlex tools",
-            details={"env": "OPENALEX_API_KEY"},
-        )
-    return settings.openalex_api_key
+def _openalex_auth_params(settings: Settings) -> dict[str, str]:
+    params: dict[str, str] = {}
+    api_key = str(settings.openalex_api_key or "").strip()
+    mailto = str(settings.openalex_mailto or "").strip()
+    if api_key:
+        params["api_key"] = api_key
+    if mailto:
+        params["mailto"] = mailto
+    if params:
+        return params
+    raise ToolExecutionError(
+        code="UNCONFIGURED",
+        message="OpenAlex tools require OPENALEX_API_KEY or OPENALEX_MAILTO",
+        details={"env": ["OPENALEX_API_KEY", "OPENALEX_MAILTO"]},
+    )
 
 
 def _as_pubmed_params(settings: Settings, base: dict[str, Any]) -> dict[str, Any]:
@@ -254,7 +261,7 @@ def _europepmc_record_query_from_id(raw_id: str, id_type: str) -> str:
 
 def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSpec]:
     def openalex_search_works(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
-        key = _ensure_openalex_key(settings)
+        auth_params = _openalex_auth_params(settings)
         query = str(payload.get("query", "")).strip()
         if not query:
             raise ToolExecutionError(code="VALIDATION_ERROR", message="'query' is required")
@@ -267,8 +274,8 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
             "search": query,
             "per-page": per_page,
             "page": page,
-            "api_key": key,
         }
+        params.update(auth_params)
         if filter_value:
             params["filter"] = filter_value
 
@@ -313,7 +320,7 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
         )
 
     def openalex_get_works(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
-        key = _ensure_openalex_key(settings)
+        auth_params = _openalex_auth_params(settings)
         ids = payload.get("ids") or []
         if not isinstance(ids, list) or not ids:
             raise ToolExecutionError(code="VALIDATION_ERROR", message="'ids' must be a non-empty list")
@@ -333,7 +340,7 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
                 work_id = raw
             url = f"https://api.openalex.org/works/{parse.quote(work_id)}"
             try:
-                data, headers = http.get_json(url=url, params={"api_key": key})
+                data, headers = http.get_json(url=url, params=auth_params)
                 compact = _compact_openalex_record(data)
                 records.append(compact)
                 request_id = request_id or _request_id(headers)
@@ -363,6 +370,20 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
             request_id=request_id,
             ctx=ctx,
         )
+
+    def openalex_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        # Alias wrapper to keep stable tool names expected by downstream routing/tests.
+        remapped = {
+            "query": payload.get("query"),
+            "per_page": payload.get("limit", payload.get("per_page", 25)),
+            "page": payload.get("page", 1),
+            "filter": payload.get("filter"),
+        }
+        return openalex_search_works(remapped, ctx)
+
+    def openalex_fetch(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        remapped = {"ids": payload.get("ids")}
+        return openalex_get_works(remapped, ctx)
 
     def pubmed_esearch(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
         term = str(payload.get("term", "")).strip()
@@ -498,9 +519,42 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
         )
         records = _parse_pubmed_xml_records(xml_text)
 
+        # Fallback enrichment: if XML record lacks publication types, pull compact metadata
+        # from ESummary so downstream RCT/systematic flags remain available.
+        missing_pub_types_pmids = [
+            str(rec.get("pmid"))
+            for rec in records
+            if rec.get("pmid") and not list(rec.get("publication_types") or [])
+        ]
+        if missing_pub_types_pmids:
+            summary_params = _as_pubmed_params(
+                settings,
+                {
+                    "db": "pubmed",
+                    "id": ",".join(missing_pub_types_pmids),
+                    "retmode": "json",
+                },
+            )
+            summary_data, _ = http.get_json(
+                url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+                params=summary_params,
+            )
+            summary_result = (summary_data or {}).get("result") or {}
+            for rec in records:
+                pmid = str(rec.get("pmid") or "")
+                if not pmid or list(rec.get("publication_types") or []):
+                    continue
+                node = summary_result.get(pmid) or {}
+                pub_types = list(node.get("pubtype") or [])
+                if pub_types:
+                    rec["publication_types"] = pub_types
+
         processed: list[dict[str, Any]] = []
         for record in records:
             out = dict(record)
+            pub_types_lower = [str(item or "").lower() for item in (out.get("publication_types") or [])]
+            out["is_meta_or_systematic"] = any("meta-analysis" in item or "systematic review" in item for item in pub_types_lower)
+            out["is_rct_like"] = any("randomized controlled trial" in item or "clinical trial" in item for item in pub_types_lower)
             if not include_abstract:
                 out.pop("abstract", None)
             if not include_classification_fields:
@@ -756,7 +810,7 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
 
     tools: list[ToolSpec] = []
 
-    if settings.enable_openalex_tools and settings.openalex_api_key:
+    if settings.enable_openalex_tools and (settings.openalex_api_key or settings.openalex_mailto):
         tools.extend(
             [
                 ToolSpec(
@@ -776,6 +830,23 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
                     source="openalex",
                 ),
                 ToolSpec(
+                    name="openalex_search",
+                    description="Alias: search OpenAlex works with mode/limit style arguments.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
+                            "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 25},
+                            "page": {"type": "integer", "minimum": 1, "default": 1},
+                            "filter": {"type": "string"},
+                        },
+                        "required": ["query"],
+                    },
+                    handler=openalex_search,
+                    source="openalex",
+                ),
+                ToolSpec(
                     name="openalex_get_works",
                     description="Fetch specific OpenAlex works by IDs.",
                     input_schema={
@@ -786,6 +857,19 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
                         "required": ["ids"],
                     },
                     handler=openalex_get_works,
+                    source="openalex",
+                ),
+                ToolSpec(
+                    name="openalex_fetch",
+                    description="Alias: fetch OpenAlex works by ID list.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "ids": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["ids"],
+                    },
+                    handler=openalex_fetch,
                     source="openalex",
                 ),
             ]
@@ -807,6 +891,7 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
                         "type": "object",
                         "properties": {
                             "query": {"type": "string"},
+                            "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
                             "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
                             "page_token": {"type": "string"},
                             "sort": {"type": "string", "default": "relevance"},

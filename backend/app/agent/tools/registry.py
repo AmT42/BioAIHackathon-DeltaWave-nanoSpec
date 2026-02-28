@@ -19,12 +19,26 @@ class ToolSpec:
     handler: Callable[..., dict[str, Any]]
     source: str = "internal"
 
+    def _description_with_policy(self) -> str:
+        description = str(self.description or "").strip()
+        required_tokens = ("WHEN:", "AVOID:", "CRITICAL_ARGS:", "RETURNS:", "FAILS_IF:")
+        if all(token in description for token in required_tokens):
+            return description
+        base = description or "Tool execution helper."
+        return (
+            f"WHEN: {base}\n"
+            "AVOID: Misusing the tool outside its declared schema and intent.\n"
+            "CRITICAL_ARGS: Refer to parameters schema for required fields.\n"
+            "RETURNS: Structured tool output contract with data and metadata.\n"
+            "FAILS_IF: Required args are missing or upstream/tool validation fails."
+        )
+
     def openai_schema(self) -> dict[str, Any]:
         return {
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": self.description,
+                "description": self._description_with_policy(),
                 "parameters": self.input_schema,
             },
         }
@@ -32,7 +46,7 @@ class ToolSpec:
     def anthropic_schema(self) -> dict[str, Any]:
         return {
             "name": self.name,
-            "description": self.description,
+            "description": self._description_with_policy(),
             "input_schema": self.input_schema,
         }
 

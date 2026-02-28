@@ -17,10 +17,12 @@ from app.agent.tools.science_registry import create_science_registry
 from app.config import get_settings
 
 
-BUILTIN_TOOLS = {"calc", "web_search_mock", "fetch_paper_stub"}
-SKIPPED_TOOLS = {"openalex_search_works", "openalex_get_works"}
-OPTIONAL_TOOL_PREFIXES = ("semanticscholar_", "openalex_", "epistemonikos_")
-OPTIONAL_TOOL_NAMES = {"chembl_search_molecules", "chembl_get_molecule", "chebi_search_entities", "chebi_get_entity"}
+SKIPPED_TOOLS = {
+    "openalex_search_works",
+    "openalex_get_works",
+}
+OPTIONAL_TOOL_PREFIXES = ("openalex_",)
+OPTIONAL_TOOL_NAMES = {"chembl_search", "chembl_fetch", "chebi_search", "chebi_fetch"}
 
 TOOL_ENDPOINT_HINTS = {
     "openalex_search_works": "https://api.openalex.org/works",
@@ -59,10 +61,6 @@ TOOL_ENDPOINT_HINTS = {
     "chembl_get_molecule": "https://www.ebi.ac.uk/chembl/api/data/molecule/{chembl_id}.json",
     "chebi_search_entities": "https://www.ebi.ac.uk/chebi/backend/api/public/es_search/",
     "chebi_get_entity": "https://www.ebi.ac.uk/chebi/backend/api/public/compound/{chebi_id}/",
-    "semanticscholar_search_papers": "https://api.semanticscholar.org/graph/v1/paper/search",
-    "semanticscholar_get_papers": "https://api.semanticscholar.org/graph/v1/paper/{paper_id}",
-    "epistemonikos_search_reviews": "https://api.epistemonikos.org/v1/documents/search",
-    "epistemonikos_get_review": "https://api.epistemonikos.org/v1/documents/{id}",
 }
 
 
@@ -90,8 +88,7 @@ def summarize_strict_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         row
         for row in results
         if bool(row.get("enabled", True))
-        if row.get("tool") not in BUILTIN_TOOLS
-        and row.get("tool") not in SKIPPED_TOOLS
+        if row.get("tool") not in SKIPPED_TOOLS
     ]
     core_rows = [row for row in checked_rows if not _is_optional_tool(str(row.get("tool") or ""))]
     optional_rows = [row for row in checked_rows if _is_optional_tool(str(row.get("tool") or ""))]
@@ -182,11 +179,6 @@ def main() -> None:
         }
         results.append(rec)
         return out
-
-    # Builtins (local only, intentionally not external APIs)
-    run_tool("calc", {"expression": "(12+8)*3"}, note="local builtin")
-    run_tool("web_search_mock", {"query": "longevity evidence grading"}, note="local builtin")
-    run_tool("fetch_paper_stub", {"topic": "rapamycin aging"}, note="local builtin")
 
     # Core normalization chain
     rx = run_tool("rxnorm_resolve", {"term": "rapamycin", "max_candidates": 5})
@@ -355,20 +347,6 @@ def main() -> None:
     else:
         run_tool("chebi_get_entity", {"chebi_id": "CHEBI:16708"}, note="fallback ChEBI")
 
-    s2 = run_tool("semanticscholar_search_papers", {"query": "rapamycin aging trial", "limit": 5})
-    paper_ids = safe_get(s2, "output", "ids", default=[]) or []
-    if paper_ids:
-        run_tool("semanticscholar_get_papers", {"paper_ids": paper_ids[:2]})
-    else:
-        run_tool("semanticscholar_get_papers", {"paper_ids": ["CorpusID:16596532"]}, note="fallback S2 paper id")
-
-    epi_search = run_tool("epistemonikos_search_reviews", {"query": "rapamycin aging", "limit": 5})
-    epi_ids = safe_get(epi_search, "output", "ids", default=[]) or []
-    if epi_ids:
-        run_tool("epistemonikos_get_review", {"review_id": str(epi_ids[0])})
-    else:
-        run_tool("epistemonikos_get_review", {"review_id": "demo"}, note="likely UNCONFIGURED without API key")
-
     # OpenAlex explicitly skipped per user request
     results.append(
         {
@@ -414,8 +392,6 @@ def main() -> None:
         "environment": {
             "openalex_api_key_set": bool(settings.openalex_api_key),
             "pubmed_api_key_set": bool(settings.pubmed_api_key),
-            "semanticscholar_api_key_set": bool(settings.semanticscholar_api_key),
-            "epistemonikos_api_key_set": bool(settings.epistemonikos_api_key),
             "artifacts_root": str(settings.artifacts_root),
             "source_cache_root": str(settings.source_cache_root),
             "tool_http_timeout_seconds": settings.tool_http_timeout_seconds,

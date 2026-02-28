@@ -243,7 +243,8 @@ def build_evidence_tools() -> list[ToolSpec]:
     def evidence_render_report(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
         intervention = payload.get("intervention")
         if not isinstance(intervention, dict):
-            intervention = {"label": str(payload.get("intervention") or "Intervention").strip() or "Intervention"}
+            label = str(payload.get("intervention_label") or payload.get("intervention") or "Intervention").strip()
+            intervention = {"label": label or "Intervention"}
 
         ledger = _ledger_from_payload(payload)
 
@@ -408,7 +409,8 @@ def build_evidence_tools() -> list[ToolSpec]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "intervention": {"type": ["object", "string"]},
+                    "intervention": {"type": "object"},
+                    "intervention_label": {"type": "string"},
                     "ledger": {"type": "object"},
                     "records": {"type": "array", "items": {"type": "object"}},
                     "grade": {"type": "object"},

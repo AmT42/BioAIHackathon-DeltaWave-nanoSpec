@@ -615,6 +615,29 @@ def test_gemini_provider_falls_back_to_dict_when_sdk_part_drops_signature() -> N
     assert part["thought_signature"] == "sig-raw"
 
 
+def test_gemini_provider_sanitizes_union_type_lists_in_tool_parameters() -> None:
+    provider = GeminiProvider(api_key="test-key", model="gemini/gemini-3.1-flash", mock_mode=False)
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "evidence_render_report",
+                "description": "render report",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "intervention": {"type": ["object", "string"]},
+                    },
+                },
+            },
+        }
+    ]
+
+    cfg = provider._build_tool_config(tools=tools)
+    params = cfg[0]["function_declarations"][0]["parameters"]
+    assert params["properties"]["intervention"]["type"] == "object"
+
+
 def test_gemini_provider_parses_first_json_object_from_concatenated_arguments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
