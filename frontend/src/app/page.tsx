@@ -299,38 +299,40 @@ export default function Page() {
           sidebarOpen={sidebarOpen}
         />
 
-        <div
-          className="messages-container"
-          ref={messagesContainerRef}
-          onScroll={handleMessagesScroll}
-        >
-          {!hasTurns ? (
-            <div className="welcome">
-              <div className="welcome__icon">&#x1F9EC;</div>
-              <h2 className="welcome__title">Longevity Evidence Agent</h2>
-              <p className="welcome__subtitle">
-                AI-powered evidence grading for aging interventions. Ask about any compound
-                or therapy to get a structured evidence report with confidence scores.
-              </p>
-              <div className="welcome__suggestions">
-                {SUGGESTIONS.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    className="welcome__suggestion"
-                    onClick={() => handleSuggestion(s)}
-                    disabled={!connected}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
+        <div className="content-layout">
+          <section className="chat-column">
+            <div
+              className="messages-container"
+              ref={messagesContainerRef}
+              onScroll={handleMessagesScroll}
+            >
+              {!hasTurns ? (
+                <div className="welcome">
+                  <div className="welcome__icon">&#x1F9EC;</div>
+                  <h2 className="welcome__title">Longevity Evidence Agent</h2>
+                  <p className="welcome__subtitle">
+                    AI-powered evidence grading for aging interventions. Ask about any compound
+                    or therapy to get a structured evidence report with confidence scores.
+                  </p>
+                  <div className="welcome__suggestions">
+                    {SUGGESTIONS.map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        className="welcome__suggestion"
+                        onClick={() => handleSuggestion(s)}
+                        disabled={!connected}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                state.turns.map((turn) => <ChatMessage key={turn.id} turn={turn} />)
+              )}
+              <div ref={messagesEndRef} />
             </div>
-          ) : (
-            state.turns.map((turn) => <ChatMessage key={turn.id} turn={turn} />)
-          )}
-          <div ref={messagesEndRef} />
-        </div>
 
             <Composer
               onSend={handleSend}

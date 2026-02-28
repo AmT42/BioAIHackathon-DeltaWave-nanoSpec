@@ -70,11 +70,6 @@ function extractSummary(parsed: Record<string, unknown>): string | null {
   return null;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
 function fencedCode(language: string, code: string): string {
   const safe = code.replace(/```/g, "``\\`");
   return `\`\`\`${language}\n${safe}\n\`\`\``;
