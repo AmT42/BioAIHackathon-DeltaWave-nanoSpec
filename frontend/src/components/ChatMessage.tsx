@@ -12,9 +12,9 @@ type ChatMessageProps = {
 
 export function ChatMessage({ turn }: ChatMessageProps) {
   const [expanded, setExpanded] = useState(turn.status === "streaming");
-  const hasAnswer = turn.assistantText.trim().length > 0;
-  const showAssistantPlaceholder = !hasAnswer && turn.status === "streaming";
   const workSteps = turn.workSteps;
+  const hasAnswer = turn.assistantText.trim().length > 0;
+  const showAssistantPlaceholder = !hasAnswer && (turn.status === "streaming" || workSteps.length > 0);
   const thinkingCount = workSteps.filter((s) => s.kind === "thinking").length;
   const toolCount = workSteps.filter((s) => s.kind === "tool").length;
 
@@ -89,6 +89,10 @@ export function ChatMessage({ turn }: ChatMessageProps) {
           <div className={`assistant-message__body ${turn.status === "streaming" ? "streaming-cursor" : ""}`}>
             {hasAnswer ? (
               <MarkdownRenderer content={turn.assistantText} />
+            ) : turn.status === "done" ? (
+              <span style={{ color: "var(--text-tertiary)" }}>
+                Run completed without a final assistant message.
+              </span>
             ) : (
               <span style={{ color: "var(--text-tertiary)" }}>Generating response...</span>
             )}

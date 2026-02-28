@@ -73,7 +73,7 @@ class AgentCore:
         user_message: str,
         emit: Emitter,
         run_id: str | None = None,
-        max_iterations: int = 6,
+        max_iterations: int = 50,
     ) -> dict[str, Any]:
         if provider not in self._providers:
             raise ValueError(f"Unsupported provider '{provider}'")
@@ -108,6 +108,7 @@ class AgentCore:
 
         collected_blocks: list[dict[str, Any]] = []
         last_assistant_message_id: str | None = None
+        iteration_limit_exhausted = True
 
         for _ in range(max_iterations):
             request_index += 1
@@ -467,6 +468,7 @@ class AgentCore:
             )
 
             if not normalized_tool_calls:
+                iteration_limit_exhausted = False
                 break
 
             for tc in normalized_tool_calls:
@@ -557,6 +559,14 @@ class AgentCore:
                     }
                 )
 
+        limit_completion_text = ""
+        if iteration_limit_exhausted and not final_text.strip():
+            limit_completion_text = (
+                f"I stopped after reaching the tool-iteration limit ({max_iterations}) "
+                "before producing a final narrative answer. "
+                "Please continue with a narrower scope or a higher iteration budget."
+            )
+
         completion_message: dict[str, Any] | None = None
         if last_assistant_message_id:
             last_message = await self.store.session.get(Message, last_assistant_message_id)
@@ -572,9 +582,12 @@ class AgentCore:
                     metadata["trace_v1"] = trace_v1
                 metadata["run_id"] = run_id
                 metadata["stream_mode"] = "interleaved"
+                metadata["max_iterations"] = max_iterations
+                metadata["iteration_limit_exhausted"] = iteration_limit_exhausted
 
                 updated_last = await self.store.update_message(
                     message_id=last_message.id,
+                    content=limit_completion_text or None,
                     message_metadata=metadata,
                 )
                 final_message = updated_last or last_message
