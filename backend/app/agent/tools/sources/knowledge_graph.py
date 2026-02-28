@@ -17,6 +17,7 @@ import logging
 import re
 from collections import namedtuple
 from pathlib import Path
+from numbers import Number
 from typing import Any
 
 from app.agent.tools.contracts import make_tool_output
@@ -101,6 +102,65 @@ def _strip_embedding_fields(value: Any) -> Any:
         return {k: _strip_embedding_fields(v) for k, v in value.items() if "embedding" not in k.lower()}
     if isinstance(value, list):
         return [_strip_embedding_fields(v) for v in value]
+    return value
+
+
+def _is_neo4j_node(value: Any) -> bool:
+    return hasattr(value, "labels") and hasattr(value, "element_id")
+
+
+def _is_neo4j_relationship(value: Any) -> bool:
+    return (
+        hasattr(value, "type")
+        and hasattr(value, "start_node")
+        and hasattr(value, "end_node")
+        and hasattr(value, "element_id")
+    )
+
+
+def _is_neo4j_path(value: Any) -> bool:
+    return hasattr(value, "nodes") and hasattr(value, "relationships")
+
+
+def _coerce_neo4j_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _coerce_neo4j_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_coerce_neo4j_value(v) for v in value]
+
+    if _is_neo4j_node(value):
+        node_data = {str(k): _coerce_neo4j_value(v) for k, v in value.items()}
+        node_data["__kind__"] = "node"
+        node_data["__element_id__"] = str(getattr(value, "element_id", ""))
+        node_data["__labels__"] = sorted(str(label) for label in getattr(value, "labels", []))
+        return node_data
+
+    if _is_neo4j_relationship(value):
+        rel_data = {str(k): _coerce_neo4j_value(v) for k, v in value.items()}
+        rel_data["__kind__"] = "relationship"
+        rel_data["__element_id__"] = str(getattr(value, "element_id", ""))
+        rel_data["__type__"] = str(getattr(value, "type", "RELATED_TO"))
+        rel_data["__start_element_id__"] = str(getattr(getattr(value, "start_node", None), "element_id", ""))
+        rel_data["__end_element_id__"] = str(getattr(getattr(value, "end_node", None), "element_id", ""))
+        return rel_data
+
+    if _is_neo4j_path(value):
+        return {
+            "__kind__": "path",
+            "nodes": [_coerce_neo4j_value(node) for node in getattr(value, "nodes", [])],
+            "relationships": [_coerce_neo4j_value(rel) for rel in getattr(value, "relationships", [])],
+        }
+
+    if hasattr(value, "iso_format"):
+        try:
+            return value.iso_format()
+        except Exception:
+            pass
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
     return value
 
 
@@ -334,7 +394,479 @@ def _execute_cypher(
 
     if not records:
         return []
-    return [_strip_embedding_fields(record.data()) for record in records]
+
+    # record.data() flattens graph entities to plain mappings; preserve raw values first.
+    def _record_to_raw_mapping(record: Any) -> dict[str, Any]:
+        try:
+            keys = list(record.keys())
+            return {str(key): record[key] for key in keys}
+        except Exception:
+            return record.data()
+
+    return [_strip_embedding_fields(_coerce_neo4j_value(_record_to_raw_mapping(record))) for record in records]
+
+
+# ---------------------------------------------------------------------------
+# Query-local node statistics
+# ---------------------------------------------------------------------------
+
+_CONFIDENCE_NORMALIZERS: dict[str, float] = {
+    "confidence_score": 1.0,
+    "intact_score": 1.0,
+    "opentargets_score": 1.0,
+    "disgenet_gene_disease_score": 1.0,
+    "disgenet_variant_disease_score": 1.0,
+    "disgenet_jaccard_genes_score": 1.0,
+    "disgenet_jaccard_variants_score": 1.0,
+    "diseases_confidence_score": 1.0,
+    "oma_orthology_score": 1.0,
+    "string_combined_score": 1000.0,
+    "string_physical_combined_score": 1000.0,
+    "stitch_combined_score": 1000.0,
+    "pchembl": 10.0,
+    "max_phase": 4.0,
+}
+
+_PRIORITY_CONFIDENCE_KEYS: tuple[str, ...] = (
+    "confidence_score",
+    "opentargets_score",
+    "intact_score",
+    "disgenet_gene_disease_score",
+    "disgenet_variant_disease_score",
+    "diseases_confidence_score",
+    "oma_orthology_score",
+    "string_combined_score",
+    "string_physical_combined_score",
+    "stitch_combined_score",
+    "pchembl",
+    "max_phase",
+)
+
+
+def _safe_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, Number):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except Exception:
+            return None
+    return None
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    if value < low:
+        return low
+    if value > high:
+        return high
+    return value
+
+
+def _normalize_confidence_value(key: str, value: Any) -> float | None:
+    numeric = _safe_float(value)
+    if numeric is None:
+        return None
+    k = key.strip().lower()
+    if k in _CONFIDENCE_NORMALIZERS:
+        divisor = _CONFIDENCE_NORMALIZERS[k]
+        if divisor <= 0:
+            return None
+        return _clamp(numeric / divisor, 0.0, 1.0)
+    if 0.0 <= numeric <= 1.0:
+        return numeric
+    if numeric <= 10.0:
+        return _clamp(numeric / 10.0, 0.0, 1.0)
+    if numeric <= 100.0:
+        return _clamp(numeric / 100.0, 0.0, 1.0)
+    return _clamp(numeric / 1000.0, 0.0, 1.0)
+
+
+def _select_confidence_score(properties: dict[str, Any]) -> tuple[float | None, str | None]:
+    normalized_props = {str(k).strip().lower(): v for k, v in properties.items()}
+
+    for key in _PRIORITY_CONFIDENCE_KEYS:
+        if key not in normalized_props:
+            continue
+        score = _normalize_confidence_value(key, normalized_props[key])
+        if score is not None:
+            return score, key
+
+    for key, value in normalized_props.items():
+        if "score" not in key and "confidence" not in key:
+            continue
+        score = _normalize_confidence_value(key, value)
+        if score is not None:
+            return score, key
+    return None, None
+
+
+def _edge_weight(properties: dict[str, Any]) -> tuple[float, str | None]:
+    confidence, confidence_key = _select_confidence_score(properties)
+    if confidence is None:
+        return 1.0, None
+    return 1.0 + confidence, confidence_key
+
+
+def _clean_wrapped_properties(value: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in value.items() if not str(k).startswith("__")}
+
+
+def _node_type_from_labels(labels: list[str]) -> str:
+    clean_labels = [str(label).strip() for label in labels if str(label).strip()]
+    if clean_labels:
+        return sorted(clean_labels)[0]
+    return "Unknown"
+
+
+def _node_name(properties: dict[str, Any], fallback: str) -> str:
+    for key in ("name", "gene_symbol", "primary_protein_name", "organism_name"):
+        value = properties.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return fallback
+
+
+def _node_public_id(properties: dict[str, Any], fallback: str) -> str:
+    for key in ("id", "gene_symbol", "name"):
+        value = properties.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return fallback
+
+
+def _collect_wrapped_graph_values(
+    value: Any,
+    *,
+    node_wrappers: list[dict[str, Any]],
+    rel_wrappers: list[dict[str, Any]],
+) -> None:
+    if _is_neo4j_node(value) or _is_neo4j_relationship(value) or _is_neo4j_path(value):
+        _collect_wrapped_graph_values(
+            _coerce_neo4j_value(value),
+            node_wrappers=node_wrappers,
+            rel_wrappers=rel_wrappers,
+        )
+        return
+
+    if isinstance(value, dict):
+        kind = str(value.get("__kind__", "")).strip().lower()
+        if kind == "node":
+            node_wrappers.append(value)
+        elif kind == "relationship":
+            rel_wrappers.append(value)
+
+        for nested in value.values():
+            _collect_wrapped_graph_values(nested, node_wrappers=node_wrappers, rel_wrappers=rel_wrappers)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_wrapped_graph_values(item, node_wrappers=node_wrappers, rel_wrappers=rel_wrappers)
+
+
+def _upsert_node(
+    node_wrapper: dict[str, Any],
+    *,
+    nodes_by_key: dict[str, dict[str, Any]],
+    element_to_key: dict[str, str],
+) -> str:
+    element_id = str(node_wrapper.get("__element_id__", "")).strip()
+    labels_raw = node_wrapper.get("__labels__", [])
+    labels = [str(label) for label in labels_raw] if isinstance(labels_raw, list) else []
+    properties = _clean_wrapped_properties(node_wrapper)
+
+    node_type = _node_type_from_labels(labels)
+    fallback_id = element_id or f"{node_type}:unknown"
+    public_id = _node_public_id(properties, fallback=fallback_id)
+
+    key = element_id if element_id else f"{node_type}:{public_id}"
+    if key in nodes_by_key:
+        existing = nodes_by_key[key]
+        merged_labels = sorted(set(existing.get("labels", [])) | set(labels))
+        existing["labels"] = merged_labels
+        if existing.get("node_type") == "Unknown" and node_type != "Unknown":
+            existing["node_type"] = node_type
+        if existing.get("id", "").endswith(":unknown") and public_id:
+            existing["id"] = public_id
+        if not existing.get("name"):
+            existing["name"] = _node_name(properties, fallback=public_id)
+    else:
+        nodes_by_key[key] = {
+            "key": key,
+            "id": public_id,
+            "name": _node_name(properties, fallback=public_id),
+            "node_type": node_type,
+            "labels": labels,
+        }
+
+    if element_id:
+        element_to_key[element_id] = key
+    return key
+
+
+def _ensure_placeholder_node(
+    element_id: str,
+    *,
+    nodes_by_key: dict[str, dict[str, Any]],
+    element_to_key: dict[str, str],
+) -> str:
+    clean_id = element_id.strip()
+    if clean_id in element_to_key:
+        return element_to_key[clean_id]
+    key = clean_id or "unknown-node"
+    if key not in nodes_by_key:
+        nodes_by_key[key] = {
+            "key": key,
+            "id": key,
+            "name": key,
+            "node_type": "Unknown",
+            "labels": [],
+        }
+    if clean_id:
+        element_to_key[clean_id] = key
+    return key
+
+
+def _extract_subgraph_from_records(records: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    node_wrappers: list[dict[str, Any]] = []
+    rel_wrappers: list[dict[str, Any]] = []
+    for row in records:
+        _collect_wrapped_graph_values(row, node_wrappers=node_wrappers, rel_wrappers=rel_wrappers)
+
+    nodes_by_key: dict[str, dict[str, Any]] = {}
+    element_to_key: dict[str, str] = {}
+    for node_wrapper in node_wrappers:
+        _upsert_node(node_wrapper, nodes_by_key=nodes_by_key, element_to_key=element_to_key)
+
+    edges: list[dict[str, Any]] = []
+    seen_edges: set[tuple[str, str, str, str]] = set()
+
+    for rel_wrapper in rel_wrappers:
+        rel_type = str(rel_wrapper.get("__type__", "RELATED_TO")).strip() or "RELATED_TO"
+        rel_id = str(rel_wrapper.get("__element_id__", "")).strip()
+        start_element_id = str(rel_wrapper.get("__start_element_id__", "")).strip()
+        end_element_id = str(rel_wrapper.get("__end_element_id__", "")).strip()
+        if not start_element_id or not end_element_id:
+            continue
+
+        source_key = _ensure_placeholder_node(start_element_id, nodes_by_key=nodes_by_key, element_to_key=element_to_key)
+        target_key = _ensure_placeholder_node(end_element_id, nodes_by_key=nodes_by_key, element_to_key=element_to_key)
+        edge_key = (source_key, target_key, rel_type, rel_id)
+        if edge_key in seen_edges:
+            continue
+        seen_edges.add(edge_key)
+
+        rel_properties = _clean_wrapped_properties(rel_wrapper)
+        weight, confidence_key = _edge_weight(rel_properties)
+        edges.append(
+            {
+                "source": source_key,
+                "target": target_key,
+                "type": rel_type,
+                "weight": float(weight),
+                "confidence_key": confidence_key,
+            }
+        )
+
+    return nodes_by_key, edges
+
+
+def _compute_weighted_pagerank(
+    node_keys: list[str],
+    *,
+    adjacency: dict[str, dict[str, float]],
+    out_weight_sum: dict[str, float],
+    damping: float = 0.85,
+    max_iter: int = 100,
+    tol: float = 1e-9,
+) -> dict[str, float]:
+    node_count = len(node_keys)
+    if node_count == 0:
+        return {}
+
+    base = 1.0 / node_count
+    ranks = {node_key: base for node_key in node_keys}
+    teleport = (1.0 - damping) / node_count
+
+    for _ in range(max_iter):
+        dangling = sum(ranks[node_key] for node_key in node_keys if out_weight_sum.get(node_key, 0.0) <= 0.0)
+        next_ranks = {node_key: teleport + damping * dangling / node_count for node_key in node_keys}
+
+        for source_key, targets in adjacency.items():
+            source_out = out_weight_sum.get(source_key, 0.0)
+            if source_out <= 0.0:
+                continue
+            source_rank = ranks.get(source_key, 0.0)
+            if source_rank <= 0.0:
+                continue
+            scaled = damping * source_rank / source_out
+            for target_key, edge_weight in targets.items():
+                next_ranks[target_key] = next_ranks.get(target_key, 0.0) + scaled * edge_weight
+
+        delta = sum(abs(next_ranks[node_key] - ranks[node_key]) for node_key in node_keys)
+        ranks = next_ranks
+        if delta < tol:
+            break
+
+    return ranks
+
+
+def _min_max_normalize(values: dict[str, float], keys: list[str]) -> dict[str, float]:
+    if not keys:
+        return {}
+    numbers = [values.get(key, 0.0) for key in keys]
+    min_value = min(numbers)
+    max_value = max(numbers)
+    span = max_value - min_value
+    if span <= 1e-12:
+        constant = 1.0 if max_value > 0.0 else 0.0
+        return {key: constant for key in keys}
+    return {key: (values.get(key, 0.0) - min_value) / span for key in keys}
+
+
+def _build_query_local_node_stats(records: list[dict[str, Any]], *, top_n_per_type: int = 5) -> dict[str, Any]:
+    nodes_by_key, edges = _extract_subgraph_from_records(records)
+    if not nodes_by_key:
+        return {
+            "summary": {
+                "node_count": 0,
+                "edge_count": 0,
+                "node_type_count": 0,
+            },
+            "scoring": {
+                "scope": "query_local",
+                "per_node_type_ranking": True,
+                "weights": {
+                    "pagerank": 0.55,
+                    "weighted_degree": 0.30,
+                    "edge_type_diversity": 0.15,
+                },
+                "edge_weighting": "confidence_aware_fallback_1.0",
+            },
+            "by_type": [],
+        }
+
+    node_keys = sorted(nodes_by_key.keys())
+    out_weight_sum = {key: 0.0 for key in node_keys}
+    in_weight_sum = {key: 0.0 for key in node_keys}
+    out_degree = {key: 0 for key in node_keys}
+    in_degree = {key: 0 for key in node_keys}
+    edge_type_sets = {key: set() for key in node_keys}
+    adjacency: dict[str, dict[str, float]] = {key: {} for key in node_keys}
+
+    for edge in edges:
+        source_key = str(edge["source"])
+        target_key = str(edge["target"])
+        weight = float(edge.get("weight", 1.0))
+        relation_type = str(edge.get("type", "RELATED_TO"))
+        if source_key not in nodes_by_key or target_key not in nodes_by_key:
+            continue
+
+        out_weight_sum[source_key] += weight
+        in_weight_sum[target_key] += weight
+        out_degree[source_key] += 1
+        in_degree[target_key] += 1
+        edge_type_sets[source_key].add(relation_type)
+        edge_type_sets[target_key].add(relation_type)
+        adjacency[source_key][target_key] = adjacency[source_key].get(target_key, 0.0) + weight
+
+    pagerank = _compute_weighted_pagerank(node_keys, adjacency=adjacency, out_weight_sum=out_weight_sum)
+    weighted_degree = {key: out_weight_sum[key] + in_weight_sum[key] for key in node_keys}
+    edge_type_diversity = {key: float(len(edge_type_sets[key])) for key in node_keys}
+
+    by_type_keys: dict[str, list[str]] = {}
+    for key, node in nodes_by_key.items():
+        node_type = str(node.get("node_type", "Unknown") or "Unknown")
+        by_type_keys.setdefault(node_type, []).append(key)
+
+    by_type: list[dict[str, Any]] = []
+    for node_type in sorted(by_type_keys):
+        keys = by_type_keys[node_type]
+        norm_pagerank = _min_max_normalize(pagerank, keys)
+        norm_weighted_degree = _min_max_normalize(weighted_degree, keys)
+        norm_diversity = _min_max_normalize(edge_type_diversity, keys)
+
+        scored: list[dict[str, Any]] = []
+        for key in keys:
+            score = (
+                0.55 * norm_pagerank.get(key, 0.0)
+                + 0.30 * norm_weighted_degree.get(key, 0.0)
+                + 0.15 * norm_diversity.get(key, 0.0)
+            )
+            node = nodes_by_key[key]
+            scored.append(
+                {
+                    "key": key,
+                    "id": node.get("id"),
+                    "name": node.get("name"),
+                    "labels": node.get("labels", []),
+                    "importance_score": round(score, 6),
+                    "metrics": {
+                        "pagerank": round(pagerank.get(key, 0.0), 6),
+                        "weighted_degree": round(weighted_degree.get(key, 0.0), 6),
+                        "edge_type_diversity": int(edge_type_diversity.get(key, 0.0)),
+                        "in_degree": int(in_degree.get(key, 0)),
+                        "out_degree": int(out_degree.get(key, 0)),
+                        "weighted_in_degree": round(in_weight_sum.get(key, 0.0), 6),
+                        "weighted_out_degree": round(out_weight_sum.get(key, 0.0), 6),
+                    },
+                    "normalized": {
+                        "pagerank": round(norm_pagerank.get(key, 0.0), 6),
+                        "weighted_degree": round(norm_weighted_degree.get(key, 0.0), 6),
+                        "edge_type_diversity": round(norm_diversity.get(key, 0.0), 6),
+                    },
+                }
+            )
+
+        scored.sort(
+            key=lambda row: (
+                -float(row["importance_score"]),
+                -float(row["metrics"]["pagerank"]),
+                -float(row["metrics"]["weighted_degree"]),
+                str(row.get("name") or row.get("id") or row.get("key")),
+            )
+        )
+
+        top_nodes = []
+        for rank, row in enumerate(scored[:top_n_per_type], start=1):
+            top_nodes.append(
+                {
+                    "rank": rank,
+                    "id": row["id"],
+                    "name": row["name"],
+                    "labels": row["labels"],
+                    "importance_score": row["importance_score"],
+                    "metrics": row["metrics"],
+                    "normalized": row["normalized"],
+                }
+            )
+
+        by_type.append(
+            {
+                "node_type": node_type,
+                "total_nodes": len(keys),
+                "top_nodes": top_nodes,
+            }
+        )
+
+    return {
+        "summary": {
+            "node_count": len(nodes_by_key),
+            "edge_count": len(edges),
+            "node_type_count": len(by_type),
+        },
+        "scoring": {
+            "scope": "query_local",
+            "per_node_type_ranking": True,
+            "weights": {
+                "pagerank": 0.55,
+                "weighted_degree": 0.30,
+                "edge_type_diversity": 0.15,
+            },
+            "edge_weighting": "confidence_aware_fallback_1.0",
+        },
+        "by_type": by_type,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +908,10 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
         top_k = int(payload.get("top_k", 25))
         if top_k < 1 or top_k > 100:
             raise ToolExecutionError(code="VALIDATION_ERROR", message="'top_k' must be between 1 and 100")
+        include_node_stats = bool(payload.get("include_node_stats", True))
+        top_n_per_type = int(payload.get("top_n_per_type", 5))
+        if top_n_per_type < 1 or top_n_per_type > 25:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'top_n_per_type' must be between 1 and 25")
 
         api_key = _require_gemini_key(settings)
         uri, user, password, database = _require_neo4j_settings(settings)
@@ -402,12 +938,16 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
                 details={"cypher": cypher},
             ) from exc
 
+        data: dict[str, Any] = {"cypher": cypher, "records": rows}
+        if include_node_stats:
+            data["node_stats"] = _build_query_local_node_stats(rows, top_n_per_type=top_n_per_type)
+
         summary = f"KG query returned {len(rows)} records" if rows else "KG query returned no results"
         return make_tool_output(
             source="crossbar_kg",
             summary=summary,
             result_kind="record_list",
-            data={"cypher": cypher, "records": rows},
+            data=data,
         )
 
     # --- kg_cypher_execute handler ------------------------------------------
@@ -419,6 +959,10 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
         if top_k < 1 or top_k > 100:
             raise ToolExecutionError(code="VALIDATION_ERROR", message="'top_k' must be between 1 and 100")
         correct = payload.get("correct_directions", True)
+        include_node_stats = bool(payload.get("include_node_stats", True))
+        top_n_per_type = int(payload.get("top_n_per_type", 5))
+        if top_n_per_type < 1 or top_n_per_type > 25:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'top_n_per_type' must be between 1 and 25")
 
         uri, user, password, database = _require_neo4j_settings(settings)
 
@@ -435,12 +979,16 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
                 details={"cypher": cypher},
             ) from exc
 
+        data: dict[str, Any] = {"cypher": cypher, "records": rows}
+        if include_node_stats:
+            data["node_stats"] = _build_query_local_node_stats(rows, top_n_per_type=top_n_per_type)
+
         summary = f"Cypher returned {len(rows)} records" if rows else "Cypher returned no results"
         return make_tool_output(
             source="crossbar_kg",
             summary=summary,
             result_kind="record_list",
-            data={"cypher": cypher, "records": rows},
+            data=data,
         )
 
     # --- ToolSpec definitions -----------------------------------------------
@@ -477,6 +1025,18 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
                     "type": "integer",
                     "description": "Maximum number of result rows (1-100, default 25)",
                     "default": 25,
+                },
+                "include_node_stats": {
+                    "type": "boolean",
+                    "description": "Whether to compute query-local node importance stats (default true)",
+                    "default": True,
+                },
+                "top_n_per_type": {
+                    "type": "integer",
+                    "description": "How many ranked nodes to return per node type (1-25, default 5)",
+                    "default": 5,
+                    "minimum": 1,
+                    "maximum": 25,
                 },
             },
             "required": ["question"],
@@ -520,6 +1080,18 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
                     "type": "boolean",
                     "description": "Whether to validate/correct relationship directions against the schema (default true)",
                     "default": True,
+                },
+                "include_node_stats": {
+                    "type": "boolean",
+                    "description": "Whether to compute query-local node importance stats (default true)",
+                    "default": True,
+                },
+                "top_n_per_type": {
+                    "type": "integer",
+                    "description": "How many ranked nodes to return per node type (1-25, default 5)",
+                    "default": 5,
+                    "minimum": 1,
+                    "maximum": 25,
                 },
             },
             "required": ["cypher"],
