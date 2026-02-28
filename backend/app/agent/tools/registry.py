@@ -69,6 +69,12 @@ class ToolRegistry:
     def anthropic_schemas(self) -> list[dict[str, Any]]:
         return [tool.anthropic_schema() for tool in self._by_name.values()]
 
+    def names(self) -> list[str]:
+        return sorted(self._by_name.keys())
+
+    def get_spec(self, tool_name: str) -> ToolSpec | None:
+        return self._by_name.get(tool_name)
+
     def _call_handler(self, handler: Callable[..., dict[str, Any]], payload: dict[str, Any], ctx: ToolContext | None) -> dict[str, Any]:
         params = list(inspect.signature(handler).parameters.values())
         if len(params) >= 2:

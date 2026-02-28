@@ -342,6 +342,7 @@ class GeminiProvider(ProviderClient):
         self,
         *,
         messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
         on_thinking_token,
         on_text_token,
     ) -> ProviderStreamResult:
@@ -356,13 +357,23 @@ class GeminiProvider(ProviderClient):
             on_thinking_token(token + " ")
 
         lowered = user_text.lower()
+        available_tool_names = {
+            str(((schema or {}).get("function") or {}).get("name") or "").strip()
+            for schema in tools
+            if isinstance(schema, dict)
+        }
         tool_calls: list[ToolCall] = []
-        if "search" in lowered:
+        if "search" in lowered and "repl_exec" in available_tool_names:
             tool_calls.append(
                 ToolCall(
                     id="mock_gemini_search_1",
-                    name="pubmed_search",
-                    input={"query": user_text, "mode": "precision", "limit": 5},
+                    name="repl_exec",
+                    input={
+                        "code": (
+                            f"result = pubmed_search(query={json.dumps(user_text)}, mode='precision', limit=5)\n"
+                            "print(result.preview())"
+                        )
+                    },
                 )
             )
             text = "I will run a quick literature search first."
@@ -872,7 +883,12 @@ class GeminiProvider(ProviderClient):
         on_text_token,
     ) -> ProviderStreamResult:
         if self.mock_mode:
-            return self._mock_turn(messages=messages, on_thinking_token=on_thinking_token, on_text_token=on_text_token)
+            return self._mock_turn(
+                messages=messages,
+                tools=tools,
+                on_thinking_token=on_thinking_token,
+                on_text_token=on_text_token,
+            )
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY is required when MOCK_LLM=false")
 

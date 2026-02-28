@@ -3,13 +3,16 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, IO
 
 from app.agent.repl.types import ShellResult
 
 
 _SPLIT_PATTERN = re.compile(r"[|;&]{1,2}")
+ChunkCallback = Callable[[str], None]
 
 
 @dataclass(frozen=True)
@@ -64,21 +67,105 @@ class ShellExecutor:
         truncated = encoded[: self.policy.max_output_bytes].decode("utf-8", errors="replace")
         return truncated, True
 
-    def run(self, command: str, *, timeout_s: int = 30, cwd: str | None = None) -> ShellResult:
+    def _emit_chunk(self, callback: ChunkCallback | None, chunk: str) -> None:
+        if callback is None or not chunk:
+            return
+        try:
+            callback(chunk)
+        except Exception:
+            # Streaming callbacks are best-effort.
+            pass
+
+    def _read_stream(
+        self,
+        stream: IO[str] | None,
+        chunks: list[str],
+        callback: ChunkCallback | None,
+    ) -> None:
+        if stream is None:
+            return
+        try:
+            for chunk in iter(stream.readline, ""):
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                self._emit_chunk(callback, chunk)
+        finally:
+            stream.close()
+
+    def run(
+        self,
+        command: str,
+        *,
+        timeout_s: int = 30,
+        cwd: str | None = None,
+        on_stdout_chunk: ChunkCallback | None = None,
+        on_stderr_chunk: ChunkCallback | None = None,
+    ) -> ShellResult:
         self._ensure_allowed(command)
         resolved_cwd = self._resolve_cwd(cwd)
-        proc = subprocess.run(
-            ["/bin/zsh", "-lc", command],
-            cwd=str(resolved_cwd),
-            capture_output=True,
-            text=True,
-            timeout=max(1, int(timeout_s)),
-        )
-        stdout, out_truncated = self._truncate(proc.stdout or "")
-        stderr, err_truncated = self._truncate(proc.stderr or "")
+
+        timeout = max(1, int(timeout_s))
+        if on_stdout_chunk is None and on_stderr_chunk is None:
+            proc = subprocess.run(
+                ["/bin/zsh", "-lc", command],
+                cwd=str(resolved_cwd),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            stdout_raw = proc.stdout or ""
+            stderr_raw = proc.stderr or ""
+            returncode = int(proc.returncode)
+        else:
+            proc = subprocess.Popen(
+                ["/bin/zsh", "-lc", command],
+                cwd=str(resolved_cwd),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+            stdout_chunks: list[str] = []
+            stderr_chunks: list[str] = []
+
+            stdout_reader = threading.Thread(
+                target=self._read_stream,
+                args=(proc.stdout, stdout_chunks, on_stdout_chunk),
+                daemon=True,
+            )
+            stderr_reader = threading.Thread(
+                target=self._read_stream,
+                args=(proc.stderr, stderr_chunks, on_stderr_chunk),
+                daemon=True,
+            )
+            stdout_reader.start()
+            stderr_reader.start()
+
+            timed_out = False
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                proc.kill()
+                proc.wait()
+
+            stdout_reader.join()
+            stderr_reader.join()
+
+            stdout_raw = "".join(stdout_chunks)
+            stderr_raw = "".join(stderr_chunks)
+            if timed_out:
+                timeout_msg = f"Command timed out after {timeout}s."
+                stderr_raw = f"{stderr_raw}\n{timeout_msg}" if stderr_raw else timeout_msg
+                self._emit_chunk(on_stderr_chunk, f"\n{timeout_msg}")
+            returncode = int(proc.returncode if proc.returncode is not None else (124 if timed_out else 1))
+
+        stdout, out_truncated = self._truncate(stdout_raw)
+        stderr, err_truncated = self._truncate(stderr_raw)
         return ShellResult(
             command=command,
-            returncode=int(proc.returncode),
+            returncode=returncode,
             stdout=stdout,
             stderr=stderr,
             truncated=out_truncated or err_truncated,

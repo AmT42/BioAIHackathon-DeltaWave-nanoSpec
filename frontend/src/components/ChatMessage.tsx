@@ -16,7 +16,7 @@ export function ChatMessage({ turn }: ChatMessageProps) {
   const hasAnswer = turn.assistantText.trim().length > 0;
   const showAssistantPlaceholder = !hasAnswer && (turn.status === "streaming" || workSteps.length > 0);
   const thinkingCount = workSteps.filter((s) => s.kind === "thinking").length;
-  const toolCount = workSteps.filter((s) => s.kind === "tool").length;
+  const toolCount = workSteps.filter((s) => s.kind === "tool" || s.kind === "repl").length;
 
   // Auto-expand during streaming, auto-collapse when done
   useEffect(() => {
@@ -88,7 +88,10 @@ export function ChatMessage({ turn }: ChatMessageProps) {
           </div>
           <div className={`assistant-message__body ${turn.status === "streaming" ? "streaming-cursor" : ""}`}>
             {hasAnswer ? (
-              <MarkdownRenderer content={turn.assistantText} />
+              <MarkdownRenderer
+                content={turn.assistantText}
+                streaming={turn.status === "streaming"}
+              />
             ) : turn.status === "done" ? (
               <span style={{ color: "var(--text-tertiary)" }}>
                 Run completed without a final assistant message.
