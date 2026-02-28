@@ -15,6 +15,56 @@ from app.persistence.service import ChatStore
 
 
 @pytest.mark.asyncio
+async def test_core_uses_runtime_system_prompt_for_messages_and_provider_call() -> None:
+    await init_db()
+    settings = replace(get_settings(), mock_llm=True, gemini_api_key=None, gemini_model="gemini/gemini-3-flash")
+
+    class _CaptureProvider:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def stream_turn(self, **kwargs: object) -> ProviderStreamResult:
+            self.calls.append(kwargs)
+            return ProviderStreamResult(
+                text="ok",
+                thinking="planning",
+                tool_calls=[],
+                provider_state={"provider": "gemini", "mock": True},
+            )
+
+    provider = _CaptureProvider()
+
+    async with SessionLocal() as session:
+        store = ChatStore(session)
+        thread = await store.create_thread()
+        core = AgentCore(settings=settings, store=store, tools=create_builtin_registry())
+        core._providers["gemini"] = provider  # type: ignore[assignment]
+
+        events: list[dict] = []
+
+        async def emit(event: dict) -> None:
+            events.append(event)
+
+        await core.run_turn_stream(
+            thread_id=thread.id,
+            provider="gemini",
+            user_message="hello",
+            emit=emit,
+            max_iterations=1,
+        )
+
+    assert provider.calls
+    first_call = provider.calls[0]
+    system_prompt = str(first_call.get("system_prompt") or "")
+    assert "Runtime Environment Brief" in system_prompt
+    messages = first_call.get("messages")
+    assert isinstance(messages, list) and messages
+    first_message = messages[0] if isinstance(messages[0], dict) else {}
+    assert first_message.get("role") == "system"
+    assert "Runtime Environment Brief" in str(first_message.get("content") or "")
+
+
+@pytest.mark.asyncio
 async def test_core_emits_main_agent_events_and_persists_trace() -> None:
     await init_db()
     settings = replace(get_settings(), mock_llm=True, gemini_api_key=None, gemini_model="gemini/gemini-3-flash")

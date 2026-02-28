@@ -38,7 +38,7 @@ _REPL_TOOL_SCHEMA: dict[str, Any] = {
         "name": "repl_exec",
         "description": (
             "Run Python code in the persistent coding REPL for this thread. "
-            "Use this only for Python logic and calling science tool wrappers. "
+            "Use this for Python logic, tool wrappers, and structured post-processing. "
             "Do not run shell commands here; use 'bash_exec' for shell commands. "
             "Only printed output is visible back to the model."
         ),
@@ -60,8 +60,9 @@ _BASH_TOOL_SCHEMA: dict[str, Any] = {
     "function": {
         "name": "bash_exec",
         "description": (
-            "Run a guarded bash command in the workspace. "
-            "Use this for shell commands (ls, rg, cat, git, etc), not inside repl_exec."
+            "Run a workspace-confined bash command. "
+            "Use this for shell workflows: codebase navigation, file operations, and custom API calls "
+            "with curl/wget when wrappers are not enough."
         ),
         "parameters": {
             "type": "object",
@@ -140,6 +141,7 @@ class AgentCore:
             workspace_root=settings.repl_workspace_root,
             allowed_command_prefixes=settings.repl_allowed_command_prefixes,
             blocked_command_prefixes=settings.repl_blocked_command_prefixes,
+            shell_policy_mode=settings.repl_shell_policy_mode,
             max_stdout_bytes=settings.repl_max_stdout_bytes,
             max_wall_time_seconds=settings.repl_max_wall_time_seconds,
             max_tool_calls_per_exec=settings.repl_max_tool_calls_per_exec,
@@ -171,23 +173,43 @@ class AgentCore:
     def _runtime_system_prompt(self) -> str:
         tool_names = sorted(self.tools.names())
         tool_list = ", ".join(tool_names)
+        workspace_root = str(self.settings.repl_workspace_root)
+        shell_mode = self.settings.repl_shell_policy_mode
         allowed_prefixes = ", ".join(sorted(self.settings.repl_allowed_command_prefixes))
         blocked_prefixes = ", ".join(sorted(self.settings.repl_blocked_command_prefixes))
+        helpers = (
+            "`help_repl()`, `help_tools()`, `help_tool('name')`, "
+            "`help_examples('longevity')`, `help_examples('shell_vs_repl')`, `runtime_info()`, `env_vars()`"
+        )
         runtime_addendum = (
             "\n\n## Runtime Environment Brief (authoritative)\n"
             "- Execution model: `repl_exec` for Python wrappers, `bash_exec` for shell.\n"
-            "- Always prefer wrappers before ad-hoc shell/web calls for biomedical retrieval.\n"
+            "- Use wrappers first for supported biomedical retrieval; use custom shell/API calls when wrappers are missing.\n"
+            "- Shell routing guide:\n"
+            "  - codebase navigation/inspection/editing and CLI workflows -> `bash_exec`\n"
+            "  - wrapper pipelines and structured Python transforms -> `repl_exec`\n"
+            "  - do not run shell from Python REPL blocks\n"
             "- Available wrapper tools right now:\n"
             f"  {tool_list}\n"
             "- REPL helper functions available at runtime:\n"
-            "  `help_repl()`, `help_tools()`, `help_tool('name')`, `help_examples('longevity')`, `runtime_info()`, `env_vars()`\n"
+            f"  {helpers}\n"
             "- Result handle ergonomics:\n"
             "  `res.ids.head(n)`, `res.shape()`, `res.records`, `for rec in res: ...`\n"
-            "- Shell policy for `bash_exec`:\n"
-            f"  allowed prefixes: {allowed_prefixes}\n"
+            "- Shell policy for `bash_exec` (workspace confined):\n"
+            f"  workspace root: {workspace_root}\n"
+            f"  mode: {shell_mode}\n"
+            f"  allowed prefixes (guarded mode): {allowed_prefixes}\n"
             f"  blocked prefixes: {blocked_prefixes}\n"
             f"- REPL import policy: `{self.settings.repl_import_policy}`; denylist: `{', '.join(self.settings.repl_import_deny_modules)}`\n"
             f"- REPL preload mode: enabled={self.settings.repl_preload_enabled}, profile=`{self.settings.repl_preload_profile}`\n"
+            f"- Execution limits: max_wall={self.settings.repl_max_wall_time_seconds}s, "
+            f"max_stdout={self.settings.repl_max_stdout_bytes} bytes, "
+            f"max_tool_calls_per_exec={self.settings.repl_max_tool_calls_per_exec}\n"
+            "- Bash examples:\n"
+            "  - `bash_exec(command=\"rg -n 'normalize_merge_candidates' backend/app\")`\n"
+            "  - `bash_exec(command=\"curl -sS https://httpbin.org/get | jq .\")`\n"
+            "- REPL examples:\n"
+            "  - `res = pubmed_search(query='exercise AND alzheimer', limit=5); print(res.preview())`\n"
             "- If uncertain about args/signatures, call `help_tool('tool_name')` first, then print previews.\n"
         )
         return DEFAULT_SYSTEM_PROMPT.rstrip() + runtime_addendum
@@ -266,7 +288,8 @@ class AgentCore:
             request_index += 1
 
             canonical_events = await self.store.get_canonical_events(thread_id)
-            provider_messages = build_gemini_openai_messages(canonical_events, system_prompt=DEFAULT_SYSTEM_PROMPT)
+            runtime_prompt = self._runtime_system_prompt()
+            provider_messages = build_gemini_openai_messages(canonical_events, system_prompt=runtime_prompt)
             tool_schemas = [_REPL_TOOL_SCHEMA, _BASH_TOOL_SCHEMA]
 
             request_payload: dict[str, Any] = {
@@ -395,7 +418,7 @@ class AgentCore:
                     provider_client.stream_turn,
                     messages=provider_messages,
                     tools=tool_schemas,
-                    system_prompt=self._runtime_system_prompt(),
+                    system_prompt=runtime_prompt,
                     on_thinking_token=on_thinking_token,
                     on_text_token=on_text_token,
                 )

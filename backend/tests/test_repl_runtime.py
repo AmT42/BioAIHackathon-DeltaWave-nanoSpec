@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from app.agent.repl import ReplRuntime, ReplSessionManager
 from app.agent.repl.types import IdListHandle, ToolResultHandle
 from app.agent.tools.contracts import make_tool_output
@@ -288,6 +290,29 @@ def test_execute_bash_runs_command_outside_repl() -> None:
     assert out.stdout.strip()
 
 
+def test_execute_bash_open_mode_allows_unlisted_prefix() -> None:
+    runtime = _runtime(shell_policy_mode="open")
+
+    out = runtime.execute_bash(command="echo hello-open", timeout_s=10)
+
+    assert out.returncode == 0
+    assert "hello-open" in out.stdout
+
+
+def test_execute_bash_open_mode_still_blocks_hard_prefix() -> None:
+    runtime = _runtime(shell_policy_mode="open")
+
+    with pytest.raises(ValueError):
+        runtime.execute_bash(command="rm -f /tmp/repl_runtime_block_test", timeout_s=10)
+
+
+def test_execute_bash_guarded_mode_rejects_unlisted_prefix() -> None:
+    runtime = _runtime(shell_policy_mode="guarded")
+
+    with pytest.raises(ValueError):
+        runtime.execute_bash(command="echo should-fail-guarded", timeout_s=10)
+
+
 def test_repl_wrapper_maps_mixed_positional_and_max_results_alias() -> None:
     runtime = _runtime_with_tools(_echo_registry())
 
@@ -461,11 +486,16 @@ def test_repl_runtime_info_and_help_examples_helpers_available() -> None:
             "info = runtime_info()\n"
             "print('workspace_root' in info)\n"
             "print('help_examples' in info['helpers'])\n"
+            "print('shell_policy_mode' in info)\n"
+            "print('execution_limits' in info)\n"
             "ex = help_examples('longevity')\n"
             "print(ex['topic'])\n"
-            "print(len(ex['examples']) > 0)"
+            "print(len(ex['examples']) > 0)\n"
+            "ex2 = help_examples('shell_vs_repl')\n"
+            "print(ex2['topic'])\n"
+            "print(len(ex2['examples']) > 0)"
         ),
     )
 
     assert out.error is None
-    assert "True\nTrue\nlongevity\nTrue" in out.stdout
+    assert "True\nTrue\nTrue\nTrue\nlongevity\nTrue\nshell_vs_repl\nTrue" in out.stdout

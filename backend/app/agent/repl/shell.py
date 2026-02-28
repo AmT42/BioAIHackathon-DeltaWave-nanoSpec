@@ -18,6 +18,7 @@ ChunkCallback = Callable[[str], None]
 @dataclass(frozen=True)
 class ShellPolicy:
     workspace_root: Path
+    mode: str
     allowed_prefixes: tuple[str, ...]
     blocked_prefixes: tuple[str, ...]
     max_output_bytes: int
@@ -43,6 +44,9 @@ class ShellExecutor:
             raise ValueError("Empty shell command")
         if token in {item.lower() for item in self.policy.blocked_prefixes}:
             raise ValueError(f"Blocked command prefix: {token}")
+        mode = str(self.policy.mode or "open").strip().lower()
+        if mode == "open":
+            return
         allowed = {item.lower() for item in self.policy.allowed_prefixes}
         if token not in allowed:
             raise ValueError(

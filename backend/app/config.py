@@ -59,6 +59,7 @@ class Settings:
     repl_max_tool_calls_per_exec: int
     repl_session_ttl_seconds: int
     repl_max_sessions: int
+    repl_shell_policy_mode: str
     repl_allowed_command_prefixes: tuple[str, ...]
     repl_blocked_command_prefixes: tuple[str, ...]
     repl_env_snapshot_mode: str
@@ -139,6 +140,13 @@ def _normalize_repl_import_policy(value: str | None) -> str:
     return "permissive"
 
 
+def _normalize_repl_shell_policy_mode(value: str | None) -> str:
+    normalized = (value or "open").strip().lower()
+    if normalized in {"guarded", "open"}:
+        return normalized
+    return "open"
+
+
 def _normalize_repl_preload_fail_mode(value: str | None) -> str:
     normalized = (value or "warn_continue").strip().lower()
     if normalized in {"warn_continue", "fail_fast"}:
@@ -166,8 +174,9 @@ def get_settings() -> Settings:
     workspace_root = Path(os.getenv("REPL_WORKSPACE_ROOT", str(backend_root.parent))).expanduser().resolve()
     allowed_prefixes = _env_csv(
         "REPL_ALLOWED_COMMAND_PREFIXES",
-        "pwd,ls,cat,head,tail,rg,grep,find,git,python,python3,pip,uv,pytest,npm,node,make,bash,curl,wget,jq,awk,sed,cut,sort,uniq,wc,xargs,tar,gzip,gunzip,unzip",
+        "pwd,ls,cat,head,tail,rg,grep,find,git,python,python3,pip,uv,pytest,npm,node,make,bash,curl,wget,jq,awk,sed,cut,sort,uniq,wc,xargs,tar,gzip,gunzip,unzip,cp,mv,mkdir,touch,echo,tee",
     )
+    repl_shell_policy_mode = _normalize_repl_shell_policy_mode(os.getenv("REPL_SHELL_POLICY_MODE", "open"))
     blocked_prefixes = _env_csv(
         "REPL_BLOCKED_COMMAND_PREFIXES",
         "rm,shutdown,reboot,mkfs,dd,sudo,ssh,scp,nc,nmap,chmod,chown",
@@ -224,6 +233,7 @@ def get_settings() -> Settings:
         repl_max_tool_calls_per_exec=int(_env_int("REPL_MAX_TOOL_CALLS_PER_EXEC", default=200) or 200),
         repl_session_ttl_seconds=int(_env_int("REPL_SESSION_TTL_SECONDS", default=86_400) or 86_400),
         repl_max_sessions=int(_env_int("REPL_MAX_SESSIONS", default=500) or 500),
+        repl_shell_policy_mode=repl_shell_policy_mode,
         repl_allowed_command_prefixes=allowed_prefixes,
         repl_blocked_command_prefixes=blocked_prefixes,
         repl_env_snapshot_mode=repl_env_snapshot_mode,

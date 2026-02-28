@@ -232,12 +232,14 @@ class ReplBindings:
         tools: ToolRegistry,
         shell: ShellExecutor,
         import_hook: ImportCallback,
+        max_wall_time_seconds: int,
         max_tool_calls_per_exec: int,
     ) -> None:
         self.thread_id = thread_id
         self.tools = tools
         self.shell = shell
         self.import_hook = import_hook
+        self.max_wall_time_seconds = max_wall_time_seconds
         self.max_tool_calls_per_exec = max_tool_calls_per_exec
         self._hooks = _ExecutionHooks()
         self._nested_calls = 0
@@ -546,6 +548,7 @@ class ReplSessionManager:
         tools: ToolRegistry,
         shell: ShellExecutor,
         import_hook: ImportCallback,
+        max_wall_time_seconds: int,
         max_tool_calls_per_exec: int,
     ) -> ReplSessionState:
         with self._lock:
@@ -561,6 +564,7 @@ class ReplSessionManager:
                 tools=tools,
                 shell=shell,
                 import_hook=import_hook,
+                max_wall_time_seconds=max_wall_time_seconds,
                 max_tool_calls_per_exec=max_tool_calls_per_exec,
             )
             globals_map = _build_base_globals(bindings)
@@ -730,6 +734,12 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
                 "trials = clinicaltrials_fetch(ids=hits.ids.head(3))",
                 "print(trials.shape())",
             ],
+            "shell_vs_repl": [
+                "SHELL TOOL: bash_exec(command=\"rg -n 'normalize_merge_candidates' backend/app\")",
+                "SHELL TOOL: bash_exec(command=\"sed -n '1,140p' backend/app/agent/core.py\")",
+                "SHELL TOOL: bash_exec(command=\"curl -sS https://httpbin.org/get | jq .\")",
+                "REPL CODE: res = pubmed_search(query='exercise AND alzheimer', limit=5); print(res.preview())",
+            ],
         }
         if normalized_topic not in examples:
             normalized_topic = "longevity"
@@ -747,11 +757,28 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
         )
 
     def _runtime_info() -> dict[str, Any]:
+        mode = str(bindings.shell.policy.mode or "open").strip().lower()
+        blocked = {str(item).strip().lower() for item in bindings.shell.policy.blocked_prefixes}
+        allowed = {str(item).strip().lower() for item in bindings.shell.policy.allowed_prefixes}
+        can_edit_workspace_files = mode == "open" or any(
+            item in allowed for item in {"python", "python3", "bash", "cat", "cp", "mv", "sed", "awk", "tee"}
+        )
+        can_use_curl_wget = (
+            (mode == "open" or "curl" in allowed) and "curl" not in blocked
+        ) or ((mode == "open" or "wget" in allowed) and "wget" not in blocked)
         return {
             "python_version": sys.version.split(" ", 1)[0],
+            "shell_policy_mode": mode,
             "workspace_root": str(bindings.shell.policy.workspace_root),
             "bash_allowed_prefixes": sorted(str(item) for item in bindings.shell.policy.allowed_prefixes),
             "bash_blocked_prefixes": sorted(str(item) for item in bindings.shell.policy.blocked_prefixes),
+            "can_edit_workspace_files": can_edit_workspace_files,
+            "can_use_curl_wget": can_use_curl_wget,
+            "execution_limits": {
+                "max_wall_time_s": bindings.max_wall_time_seconds,
+                "max_stdout_bytes": bindings.shell.policy.max_output_bytes,
+                "max_tool_calls_per_exec": bindings.max_tool_calls_per_exec,
+            },
             "available_tools": sorted(bindings.tools.names()),
             "helpers": [
                 "help_repl",
@@ -772,14 +799,21 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
         "help_tools": lambda: sorted(bindings.tools.names()),
         "help_tool": _help_tool,
         "help_examples": _help_examples,
-        "help_bash": lambda: "Use bash_exec for shell commands, e.g. bash_exec(command='rg -n \"query\" .').",
-        "help_terminal": lambda: "Use bash_exec(command='...'). Call runtime_info() for allowed/blocked prefixes and workspace root.",
+        "help_bash": lambda: (
+            "Use bash_exec for shell tasks: codebase navigation (rg/ls/cat), "
+            "workspace edits, and custom API calls (curl/wget)."
+        ),
+        "help_terminal": lambda: (
+            "Use bash_exec(command='...') for shell workflows. "
+            "Use runtime_info() to inspect shell mode, blocked prefixes, and workspace root."
+        ),
         "env_vars": _env_vars,
         "runtime_info": _runtime_info,
         "help_repl": lambda: (
-            "Use repl_exec for Python + tool wrappers and bash_exec for shell.\n"
+            "Use repl_exec for Python wrappers/data transforms and bash_exec for shell commands.\n"
+            "Use bash_exec for navigation (`rg`, `ls`, `cat`), file workflow, and vendor API calls (`curl`/`wget`).\n"
             "Call help_tools() / help_tool('name') when unsure about wrapper signatures.\n"
-            "Use help_examples('longevity') for safe end-to-end workflow snippets.\n"
+            "Use help_examples('longevity') and help_examples('shell_vs_repl') for safe workflow snippets.\n"
             "Call runtime_info() for Python/workspace/tool/shell policy details.\n"
             "Use env_vars() to inspect current user-defined REPL variables (name/type/preview).\n"
             "Search tools usually take query + limit (or term + retmax aliases).\n"
@@ -814,6 +848,7 @@ class ReplRuntime:
         workspace_root: Path,
         allowed_command_prefixes: tuple[str, ...],
         blocked_command_prefixes: tuple[str, ...],
+        shell_policy_mode: str = "open",
         max_stdout_bytes: int,
         max_wall_time_seconds: int,
         max_tool_calls_per_exec: int,
@@ -841,6 +876,7 @@ class ReplRuntime:
         self.max_wall_time_seconds = max(1, int(max_wall_time_seconds))
         self.max_stdout_bytes = max(1024, int(max_stdout_bytes))
         self.max_tool_calls_per_exec = max(1, int(max_tool_calls_per_exec))
+        self.shell_policy_mode = shell_policy_mode if shell_policy_mode in {"guarded", "open"} else "open"
         self.env_snapshot_mode = (
             env_snapshot_mode if env_snapshot_mode in {"off", "debug", "always"} else "always"
         )
@@ -894,6 +930,7 @@ class ReplRuntime:
         self.shell = ShellExecutor(
             ShellPolicy(
                 workspace_root=workspace_root,
+                mode=self.shell_policy_mode,
                 allowed_prefixes=allowed_command_prefixes,
                 blocked_prefixes=blocked_command_prefixes,
                 max_output_bytes=self.max_stdout_bytes,
@@ -1071,6 +1108,7 @@ class ReplRuntime:
             tools=self.tools,
             shell=self.shell,
             import_hook=self._import_hook,
+            max_wall_time_seconds=self.max_wall_time_seconds,
             max_tool_calls_per_exec=self.max_tool_calls_per_exec,
         )
         assert session.bindings is not None
