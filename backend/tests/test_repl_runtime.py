@@ -418,6 +418,23 @@ def test_repl_tool_wrapper_returns_handle() -> None:
     assert "2" in out.stdout
 
 
+def test_repl_tool_result_handle_counter_aliases() -> None:
+    runtime = _runtime()
+
+    out = runtime.execute(
+        thread_id="thread-b-alias",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code="papers = fetch_paper_stub(topic='aging')\nprint(papers.ids_count)\nprint(len(papers.ids))",
+    )
+
+    assert out.error is None
+    lines = [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    assert lines[:2] == ["2", "2"]
+
+
 def test_repl_warns_when_no_print_output() -> None:
     runtime = _runtime()
 
@@ -830,6 +847,22 @@ def test_tool_result_handle_supports_candidates_and_attribute_access() -> None:
     assert handle.records[0]["rxcui"] == "123"
 
 
+def test_tool_result_handle_records_falls_back_to_studies() -> None:
+    handle = ToolResultHandle(
+        tool_name="clinicaltrials_fetch",
+        payload={
+            "summary": "ok",
+            "ids": ["NCT00000001"],
+            "data": {"studies": [{"nct_id": "NCT00000001"}]},
+        },
+        raw_result={"status": "success"},
+    )
+    assert len(handle.records) == 1
+    assert handle.records[0]["nct_id"] == "NCT00000001"
+    assert len(handle.items) == 1
+    assert len(handle.studies) == 1
+
+
 def test_repl_merge_candidates_accepts_positional_handle_list() -> None:
     runtime = _runtime_with_tools(_merge_registry())
 
@@ -932,6 +965,26 @@ def test_repl_runtime_info_and_help_examples_helpers_available() -> None:
         "True",
     ]
     assert lines[9:] == ["True", "True"]
+
+
+def test_repl_help_examples_subagents_uses_valid_evidence_tool_name() -> None:
+    runtime = _runtime()
+    out = runtime.execute(
+        thread_id="thread-n3",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code=(
+            "ex = help_examples('subagents')\n"
+            "joined = '\\n'.join(ex['examples'])\n"
+            "print('evidence_classify_pubmed_records' in joined)\n"
+            "print('evidence_classify_studies' in joined)"
+        ),
+    )
+    assert out.error is None
+    lines = [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    assert lines == ["True", "False"]
 
 
 def test_repl_installed_packages_helper_returns_items() -> None:

@@ -1,0 +1,1819 @@
+{
+  "intervention": {
+    "label": "Epigenetic reprogramming"
+  },
+  "claim_context": {
+    "query": "",
+    "intervention": "",
+    "population": "generally healthy adults / older adults",
+    "outcome": "clinically relevant ageing outcomes / healthspan",
+    "comparator": "placebo / standard of care / no intervention",
+    "claim_mode": "explicit",
+    "ask_clarify": false,
+    "directness_warnings": [],
+    "ambiguity_warnings": []
+  },
+  "evidence_summary": {
+    "score": 69.0,
+    "label": "C",
+    "confidence": "moderate",
+    "notes": []
+  },
+  "evidence_pyramid": {
+    "level_1": 2,
+    "level_2": 3,
+    "level_3": 26,
+    "level_4": 8,
+    "level_5": 2,
+    "level_6": 0
+  },
+  "counts_by_source": {
+    "pubmed": 31,
+    "clinicaltrials": 10
+  },
+  "counts_by_endpoint": {
+    "surrogate_biomarker": 2,
+    "clinical_hard": 16,
+    "clinical_intermediate": 4,
+    "mechanistic_only": 19
+  },
+  "scoring_trace": {
+    "ces": 70.0,
+    "mp": 27.0,
+    "final_confidence": 69.0,
+    "penalties": [
+      {
+        "kind": "quality",
+        "flag": "observational_risk_confounding",
+        "count": 19,
+        "delta": -6.0
+      },
+      {
+        "kind": "quality",
+        "flag": "preclinical_translation_risk",
+        "count": 10,
+        "delta": -4.0
+      },
+      {
+        "kind": "quality",
+        "flag": "small_n_or_unknown",
+        "count": 5,
+        "delta": -8.0
+      },
+      {
+        "kind": "quality",
+        "flag": "not_completed",
+        "count": 6,
+        "delta": -8.0
+      },
+      {
+        "kind": "quality",
+        "flag": "no_registry_results",
+        "count": 10,
+        "delta": -6.0
+      }
+    ],
+    "bonuses": [
+      {
+        "kind": "consistency",
+        "reason": "level1_plus_level2_present",
+        "delta": 4.0
+      }
+    ],
+    "caps_applied": [],
+    "components": {
+      "level_counts": {
+        "1": 2,
+        "2": 3,
+        "3": 26,
+        "4": 8,
+        "5": 2
+      },
+      "ces_components": {
+        "level_1": 34.0,
+        "level_2": 28.0,
+        "level_3": 16.0,
+        "level_4": 8.0,
+        "level_5": 3.4
+      },
+      "endpoint_counts": {
+        "surrogate_biomarker": 2,
+        "clinical_hard": 16,
+        "clinical_intermediate": 4,
+        "mechanistic_only": 19
+      },
+      "quality_flags": {
+        "observational_risk_confounding": 19,
+        "preclinical_translation_risk": 10,
+        "not_completed": 6,
+        "no_registry_results": 10,
+        "small_n_or_unknown": 5
+      },
+      "hallmark_tag_count": 8,
+      "human_count": 31,
+      "quality_penalty": 32.0,
+      "consistency_bonus": 4.0
+    }
+  },
+  "coverage_gaps": [],
+  "gap_map": {
+    "missing_levels": [],
+    "missing_endpoints": [],
+    "next_best_studies": [],
+    "mismatch_cautions": [],
+    "level_counts": {
+      "1": 2,
+      "2": 3,
+      "3": 26,
+      "4": 8,
+      "5": 2
+    },
+    "endpoint_counts": {
+      "surrogate_biomarker": 2,
+      "clinical_hard": 16,
+      "clinical_intermediate": 4,
+      "mechanistic_only": 19
+    }
+  },
+  "records": [
+    {
+      "study_key": "pmid:41534275",
+      "source": "pubmed",
+      "title": "Molecular basis for the early life sensitization of the brain to ultrafine carbonaceous particles: a study of the brain proteome, telomeres, and epigenetic modelling.",
+      "year": 2026,
+      "evidence_level": 3,
+      "study_type": "observational",
+      "population_class": "human",
+      "endpoint_class": "surrogate_biomarker",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "41534275",
+        "doi": "10.1016/j.envint.2026.110058"
+      },
+      "citations": [
+        {
+          "pmid": "41534275",
+          "doi": "10.1016/j.envint.2026.110058",
+          "title": "Molecular basis for the early life sensitization of the brain to ultrafine carbonaceous particles: a study of the brain proteome, telomeres, and epigenetic modelling."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Animals",
+          "Epigenesis, Genetic",
+          "Particulate Matter",
+          "Brain",
+          "Mice",
+          "Mice, Inbred C57BL",
+          "Female",
+          "Proteome",
+          "Telomere",
+          "Humans",
+          "Pregnancy",
+          "Air Pollutants",
+          "Male",
+          "Prenatal Exposure Delayed Effects",
+          "Carbon"
+        ],
+        "hallmark_tags": [
+          "telomere_attrition",
+          "epigenetic_alterations"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:40506775",
+      "source": "pubmed",
+      "title": "Exercise orchestrates systemic metabolic and neuroimmune homeostasis via the brain-muscle-liver axis to slow down aging and neurodegeneration: a narrative review.",
+      "year": 2025,
+      "evidence_level": 3,
+      "study_type": "observational",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "harm",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "40506775",
+        "doi": "10.1186/s40001-025-02751-9"
+      },
+      "citations": [
+        {
+          "pmid": "40506775",
+          "doi": "10.1186/s40001-025-02751-9",
+          "title": "Exercise orchestrates systemic metabolic and neuroimmune homeostasis via the brain-muscle-liver axis to slow down aging and neurodegeneration: a narrative review."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Review"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Aging",
+          "Exercise",
+          "Brain",
+          "Neurodegenerative Diseases",
+          "Homeostasis",
+          "Liver",
+          "Muscle, Skeletal",
+          "Animals"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations",
+          "proteostasis",
+          "nutrient_sensing",
+          "intercellular_communication"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:39259812",
+      "source": "pubmed",
+      "title": "Targeted partial reprogramming of age-associated cell states improves markers of health in mouse models of aging.",
+      "year": 2024,
+      "evidence_level": 3,
+      "study_type": "in_vitro",
+      "population_class": "human",
+      "endpoint_class": "clinical_intermediate",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "39259812",
+        "doi": "10.1126/scitranslmed.adg1777"
+      },
+      "citations": [
+        {
+          "pmid": "39259812",
+          "doi": "10.1126/scitranslmed.adg1777",
+          "title": "Targeted partial reprogramming of age-associated cell states improves markers of health in mouse models of aging."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Animals",
+          "Kruppel-Like Factor 4",
+          "Aging",
+          "Cellular Reprogramming",
+          "Disease Models, Animal",
+          "Cellular Senescence",
+          "Mice",
+          "Humans",
+          "Cyclin-Dependent Kinase Inhibitor p16",
+          "Biomarkers",
+          "Progeria",
+          "Dependovirus",
+          "Promoter Regions, Genetic"
+        ],
+        "hallmark_tags": [
+          "cellular_senescence",
+          "stem_cell_exhaustion",
+          "intercellular_communication"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:40642939",
+      "source": "pubmed",
+      "title": "Biomarkers of aging as it relates osteoarthritis: we can't improve what we can't measure.",
+      "year": 2025,
+      "evidence_level": 3,
+      "study_type": "observational",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "40642939",
+        "doi": "10.1080/03008207.2025.2528792"
+      },
+      "citations": [
+        {
+          "pmid": "40642939",
+          "doi": "10.1080/03008207.2025.2528792",
+          "title": "Biomarkers of aging as it relates osteoarthritis: we can't improve what we can't measure."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Review"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Osteoarthritis",
+          "Biomarkers",
+          "Aging",
+          "Animals",
+          "Chondrocytes"
+        ],
+        "hallmark_tags": [
+          "genomic_instability",
+          "epigenetic_alterations",
+          "cellular_senescence"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:38332583",
+      "source": "pubmed",
+      "title": "M2 macrophages secrete glutamate-containing extracellular vesicles to alleviate osteoporosis by reshaping osteoclast precursor fate.",
+      "year": 2024,
+      "evidence_level": 3,
+      "study_type": "in_vitro",
+      "population_class": "human",
+      "endpoint_class": "clinical_intermediate",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "38332583",
+        "doi": "10.1016/j.ymthe.2024.02.005"
+      },
+      "citations": [
+        {
+          "pmid": "38332583",
+          "doi": "10.1016/j.ymthe.2024.02.005",
+          "title": "M2 macrophages secrete glutamate-containing extracellular vesicles to alleviate osteoporosis by reshaping osteoclast precursor fate."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Osteoclasts",
+          "Glutamic Acid",
+          "Macrophages",
+          "Osteoporosis",
+          "Extracellular Vesicles"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations",
+          "intercellular_communication"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:40815481",
+      "source": "pubmed",
+      "title": "Integration of Vascular Smooth Muscle Cell Phenotypic Switching and Senescence.",
+      "year": 2025,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "mechanistic_only",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "40815481",
+        "doi": "10.1097/FJC.0000000000001752"
+      },
+      "citations": [
+        {
+          "pmid": "40815481",
+          "doi": "10.1097/FJC.0000000000001752",
+          "title": "Integration of Vascular Smooth Muscle Cell Phenotypic Switching and Senescence."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Systematic Review"
+        ],
+        "mesh_terms": [
+          "Cellular Senescence",
+          "Humans",
+          "Muscle, Smooth, Vascular",
+          "Animals",
+          "Myocytes, Smooth Muscle",
+          "Cell Transdifferentiation",
+          "Phenotype",
+          "Cardiovascular Diseases",
+          "Signal Transduction",
+          "Cell Plasticity",
+          "Senescence-Associated Secretory Phenotype",
+          "Vascular Calcification",
+          "Cell Proliferation"
+        ],
+        "hallmark_tags": [
+          "cellular_senescence",
+          "stem_cell_exhaustion"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:33049666",
+      "source": "pubmed",
+      "title": "From genoprotection to rejuvenation.",
+      "year": 2021,
+      "evidence_level": 3,
+      "study_type": "in_vitro",
+      "population_class": "human",
+      "endpoint_class": "clinical_intermediate",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "33049666",
+        "doi": "10.2741/4890"
+      },
+      "citations": [
+        {
+          "pmid": "33049666",
+          "doi": "10.2741/4890",
+          "title": "From genoprotection to rejuvenation."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Review"
+        ],
+        "mesh_terms": [
+          "Aging",
+          "Animals",
+          "Epigenesis, Genetic",
+          "Humans",
+          "Longevity",
+          "Rejuvenation",
+          "Signal Transduction"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations",
+          "nutrient_sensing",
+          "stem_cell_exhaustion"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:38102454",
+      "source": "pubmed",
+      "title": "Mechanisms, pathways and strategies for rejuvenation through epigenetic reprogramming.",
+      "year": 2024,
+      "evidence_level": 3,
+      "study_type": "in_vitro",
+      "population_class": "human",
+      "endpoint_class": "mechanistic_only",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "38102454",
+        "doi": "10.1038/s43587-023-00539-2"
+      },
+      "citations": [
+        {
+          "pmid": "38102454",
+          "doi": "10.1038/s43587-023-00539-2",
+          "title": "Mechanisms, pathways and strategies for rejuvenation through epigenetic reprogramming."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Review"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Animals",
+          "Mice",
+          "Rejuvenation",
+          "Aging",
+          "Cellular Reprogramming",
+          "Induced Pluripotent Stem Cells",
+          "Epigenesis, Genetic"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:37960352",
+      "source": "pubmed",
+      "title": "Uncovering the Hidden Dangers and Molecular Mechanisms of Excess Folate: A Narrative Review.",
+      "year": 2023,
+      "evidence_level": 3,
+      "study_type": "observational",
+      "population_class": "human",
+      "endpoint_class": "mechanistic_only",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "37960352",
+        "doi": "10.3390/nu15214699"
+      },
+      "citations": [
+        {
+          "pmid": "37960352",
+          "doi": "10.3390/nu15214699",
+          "title": "Uncovering the Hidden Dangers and Molecular Mechanisms of Excess Folate: A Narrative Review."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Review"
+        ],
+        "mesh_terms": [
+          "Pregnancy",
+          "Female",
+          "Humans",
+          "Folic Acid",
+          "Dietary Supplements",
+          "Vitamin B 12",
+          "Folic Acid Deficiency",
+          "DNA Methylation"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:23699511",
+      "source": "pubmed",
+      "title": "Paternal stress exposure alters sperm microRNA content and reprograms offspring HPA stress axis regulation.",
+      "year": 2013,
+      "evidence_level": 4,
+      "study_type": "rct",
+      "population_class": "animal",
+      "endpoint_class": "mechanistic_only",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "23699511",
+        "doi": "10.1523/JNEUROSCI.0914-13.2013"
+      },
+      "citations": [
+        {
+          "pmid": "23699511",
+          "doi": "10.1523/JNEUROSCI.0914-13.2013",
+          "title": "Paternal stress exposure alters sperm microRNA content and reprograms offspring HPA stress axis regulation."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Randomized Controlled Trial",
+          "Research Support, N.I.H., Extramural"
+        ],
+        "mesh_terms": [
+          "Acoustic Stimulation",
+          "Adaptation, Ocular",
+          "Analysis of Variance",
+          "Animals",
+          "Animals, Newborn",
+          "Citalopram",
+          "Disease Models, Animal",
+          "Female",
+          "Gene Expression Regulation",
+          "Hindlimb Suspension",
+          "Hypothalamo-Hypophyseal System",
+          "Male",
+          "Maze Learning",
+          "Mice",
+          "Mice, Inbred C57BL",
+          "MicroRNAs",
+          "Pituitary-Adrenal System",
+          "Pregnancy",
+          "Prenatal Exposure Delayed Effects",
+          "Reflex, Startle",
+          "Selective Serotonin Reuptake Inhibitors",
+          "Sex Factors",
+          "Spermatozoa",
+          "Stress, Psychological"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:34035273",
+      "source": "pubmed",
+      "title": "In vivo partial reprogramming of myofibers promotes muscle regeneration by remodeling the stem cell niche.",
+      "year": 2021,
+      "evidence_level": 4,
+      "study_type": "observational",
+      "population_class": "animal",
+      "endpoint_class": "mechanistic_only",
+      "effect_direction": "unknown",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "34035273",
+        "doi": "10.1038/s41467-021-23353-z"
+      },
+      "citations": [
+        {
+          "pmid": "34035273",
+          "doi": "10.1038/s41467-021-23353-z",
+          "title": "In vivo partial reprogramming of myofibers promotes muscle regeneration by remodeling the stem cell niche."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Research Support, N.I.H., Extramural",
+          "Research Support, Non-U.S. Gov't",
+          "Research Support, U.S. Gov't, Non-P.H.S."
+        ],
+        "mesh_terms": [
+          "Animals",
+          "Cell Differentiation",
+          "Cells, Cultured",
+          "Cellular Reprogramming",
+          "Female",
+          "Gene Expression",
+          "Kruppel-Like Factor 4",
+          "Kruppel-Like Transcription Factors",
+          "Mice, Transgenic",
+          "Myofibrils",
+          "Octamer Transcription Factor-3",
+          "Proto-Oncogene Proteins c-myc",
+          "Regeneration",
+          "SOXB1 Transcription Factors",
+          "Satellite Cells, Skeletal Muscle",
+          "Stem Cell Niche",
+          "Wnt4 Protein"
+        ],
+        "hallmark_tags": [
+          "stem_cell_exhaustion"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:39937646",
+      "source": "pubmed",
+      "title": "Cellular rejuvenation protects neurons from inflammation-mediated cell death.",
+      "year": 2025,
+      "evidence_level": 3,
+      "study_type": "in_vitro",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "unknown",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "39937646",
+        "doi": "10.1016/j.celrep.2025.115298"
+      },
+      "citations": [
+        {
+          "pmid": "39937646",
+          "doi": "10.1016/j.celrep.2025.115298",
+          "title": "Cellular rejuvenation protects neurons from inflammation-mediated cell death."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Animals",
+          "Kruppel-Like Factor 4",
+          "Mice",
+          "Rejuvenation",
+          "Humans",
+          "Inflammation",
+          "Encephalomyelitis, Autoimmune, Experimental",
+          "Cell Death",
+          "Retinal Ganglion Cells",
+          "Mice, Inbred C57BL",
+          "Neurons",
+          "Dependovirus",
+          "Multiple Sclerosis",
+          "Female",
+          "Transcriptome"
+        ],
+        "hallmark_tags": [
+          "genomic_instability",
+          "intercellular_communication"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:38381405",
+      "source": "pubmed",
+      "title": "Gene Therapy-Mediated Partial Reprogramming Extends Lifespan and Reverses Age-Related Changes in Aged Mice.",
+      "year": 2024,
+      "evidence_level": 3,
+      "study_type": "in_vitro",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "unknown",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "38381405",
+        "doi": "10.1089/cell.2023.0072"
+      },
+      "citations": [
+        {
+          "pmid": "38381405",
+          "doi": "10.1089/cell.2023.0072",
+          "title": "Gene Therapy-Mediated Partial Reprogramming Extends Lifespan and Reverses Age-Related Changes in Aged Mice."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Aged",
+          "Male",
+          "Humans",
+          "Animals",
+          "Mice",
+          "Longevity",
+          "Aging",
+          "Genetic Therapy",
+          "Keratinocytes",
+          "Cellular Reprogramming"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:32020082",
+      "source": "pubmed",
+      "title": "The ageing epigenome and its\u00a0rejuvenation.",
+      "year": 2020,
+      "evidence_level": 3,
+      "study_type": "observational",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "32020082",
+        "doi": "10.1038/s41580-019-0204-5"
+      },
+      "citations": [
+        {
+          "pmid": "32020082",
+          "doi": "10.1038/s41580-019-0204-5",
+          "title": "The ageing epigenome and its\u00a0rejuvenation."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Research Support, Non-U.S. Gov't",
+          "Review"
+        ],
+        "mesh_terms": [
+          "Aging",
+          "Animals",
+          "Chromatin Assembly and Disassembly",
+          "DNA Methylation",
+          "Epigenesis, Genetic",
+          "Epigenome",
+          "Epigenomics",
+          "Gene Expression Regulation",
+          "Histone Code",
+          "Humans",
+          "Longevity",
+          "Rejuvenation"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:38371924",
+      "source": "pubmed",
+      "title": "Next-generation direct reprogramming.",
+      "year": 2024,
+      "evidence_level": 5,
+      "study_type": "in_vitro",
+      "population_class": "cell",
+      "endpoint_class": "mechanistic_only",
+      "effect_direction": "unknown",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "38371924",
+        "doi": "10.3389/fcell.2024.1343106"
+      },
+      "citations": [
+        {
+          "pmid": "38371924",
+          "doi": "10.3389/fcell.2024.1343106",
+          "title": "Next-generation direct reprogramming."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Review"
+        ],
+        "mesh_terms": [],
+        "hallmark_tags": [
+          "epigenetic_alterations"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:38102202",
+      "source": "pubmed",
+      "title": "The Information Theory of Aging.",
+      "year": 2023,
+      "evidence_level": 5,
+      "study_type": "in_vitro",
+      "population_class": "cell",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "unknown",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "38102202",
+        "doi": "10.1038/s43587-023-00527-6"
+      },
+      "citations": [
+        {
+          "pmid": "38102202",
+          "doi": "10.1038/s43587-023-00527-6",
+          "title": "The Information Theory of Aging."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Review",
+          "Research Support, Non-U.S. Gov't",
+          "Research Support, N.I.H., Extramural"
+        ],
+        "mesh_terms": [
+          "Epigenesis, Genetic",
+          "DNA Methylation",
+          "Information Theory",
+          "Histones"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:35259267",
+      "source": "pubmed",
+      "title": "DNA methylation profiles after ART during human lifespan: a systematic review and meta-analysis.",
+      "year": 2022,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "35259267",
+        "doi": "10.1093/humupd/dmac010"
+      },
+      "citations": [
+        {
+          "pmid": "35259267",
+          "doi": "10.1093/humupd/dmac010",
+          "title": "DNA methylation profiles after ART during human lifespan: a systematic review and meta-analysis."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Meta-Analysis",
+          "Systematic Review",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Adult",
+          "Animals",
+          "Child",
+          "DNA",
+          "DNA Methylation",
+          "Female",
+          "Fertilization in Vitro",
+          "Genomic Imprinting",
+          "Humans",
+          "Infertility",
+          "Longevity",
+          "Pregnancy"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:31085557",
+      "source": "pubmed",
+      "title": "Aging Human Hematopoietic Stem Cells Manifest Profound Epigenetic Reprogramming of Enhancers That May Predispose to Leukemia.",
+      "year": 2019,
+      "evidence_level": 3,
+      "study_type": "in_vitro",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "31085557",
+        "doi": "10.1158/2159-8290.CD-18-1474"
+      },
+      "citations": [
+        {
+          "pmid": "31085557",
+          "doi": "10.1158/2159-8290.CD-18-1474",
+          "title": "Aging Human Hematopoietic Stem Cells Manifest Profound Epigenetic Reprogramming of Enhancers That May Predispose to Leukemia."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Research Support, N.I.H., Extramural",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Cell Differentiation",
+          "Cellular Reprogramming",
+          "Cellular Senescence",
+          "Cytosine",
+          "DNA Methylation",
+          "Disease Susceptibility",
+          "Enhancer Elements, Genetic",
+          "Epigenesis, Genetic",
+          "Gene Expression Profiling",
+          "Gene Expression Regulation, Leukemic",
+          "Hematopoietic Stem Cells",
+          "Histones",
+          "Humans",
+          "Kruppel-Like Factor 6",
+          "Leukemia",
+          "Promoter Regions, Genetic",
+          "Transcription Factors"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations",
+          "stem_cell_exhaustion"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:38553564",
+      "source": "pubmed",
+      "title": "Restoration of neuronal progenitors by partial reprogramming in the aged neurogenic niche.",
+      "year": 2024,
+      "evidence_level": 4,
+      "study_type": "in_vitro",
+      "population_class": "animal",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "unknown",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "38553564",
+        "doi": "10.1038/s43587-024-00594-3"
+      },
+      "citations": [
+        {
+          "pmid": "38553564",
+          "doi": "10.1038/s43587-024-00594-3",
+          "title": "Restoration of neuronal progenitors by partial reprogramming in the aged neurogenic niche."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Mice",
+          "Animals",
+          "Neurons",
+          "Neurogenesis",
+          "Neural Stem Cells",
+          "Cell Differentiation",
+          "Cellular Reprogramming"
+        ],
+        "hallmark_tags": [
+          "stem_cell_exhaustion"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:39053462",
+      "source": "pubmed",
+      "title": "Innate immune training restores pro-reparative myeloid functions to promote remyelination in the aged central nervous system.",
+      "year": 2024,
+      "evidence_level": 4,
+      "study_type": "observational",
+      "population_class": "animal",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "39053462",
+        "doi": "10.1016/j.immuni.2024.07.001"
+      },
+      "citations": [
+        {
+          "pmid": "39053462",
+          "doi": "10.1016/j.immuni.2024.07.001",
+          "title": "Innate immune training restores pro-reparative myeloid functions to promote remyelination in the aged central nervous system."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Animals",
+          "Immunity, Innate",
+          "Mice",
+          "Aging",
+          "Remyelination",
+          "Microglia",
+          "Myeloid Cells",
+          "Central Nervous System",
+          "Mice, Inbred C57BL",
+          "Myelin Sheath",
+          "Epigenesis, Genetic",
+          "Demyelinating Diseases",
+          "Disease Models, Animal"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations",
+          "intercellular_communication"
+        ]
+      }
+    }
+  ],
+  "top_human_studies": [
+    {
+      "study_key": "pmid:41534275",
+      "source": "pubmed",
+      "title": "Molecular basis for the early life sensitization of the brain to ultrafine carbonaceous particles: a study of the brain proteome, telomeres, and epigenetic modelling.",
+      "year": 2026,
+      "evidence_level": 3,
+      "study_type": "observational",
+      "population_class": "human",
+      "endpoint_class": "surrogate_biomarker",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "41534275",
+        "doi": "10.1016/j.envint.2026.110058"
+      },
+      "citations": [
+        {
+          "pmid": "41534275",
+          "doi": "10.1016/j.envint.2026.110058",
+          "title": "Molecular basis for the early life sensitization of the brain to ultrafine carbonaceous particles: a study of the brain proteome, telomeres, and epigenetic modelling."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Animals",
+          "Epigenesis, Genetic",
+          "Particulate Matter",
+          "Brain",
+          "Mice",
+          "Mice, Inbred C57BL",
+          "Female",
+          "Proteome",
+          "Telomere",
+          "Humans",
+          "Pregnancy",
+          "Air Pollutants",
+          "Male",
+          "Prenatal Exposure Delayed Effects",
+          "Carbon"
+        ],
+        "hallmark_tags": [
+          "telomere_attrition",
+          "epigenetic_alterations"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:40506775",
+      "source": "pubmed",
+      "title": "Exercise orchestrates systemic metabolic and neuroimmune homeostasis via the brain-muscle-liver axis to slow down aging and neurodegeneration: a narrative review.",
+      "year": 2025,
+      "evidence_level": 3,
+      "study_type": "observational",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "harm",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "40506775",
+        "doi": "10.1186/s40001-025-02751-9"
+      },
+      "citations": [
+        {
+          "pmid": "40506775",
+          "doi": "10.1186/s40001-025-02751-9",
+          "title": "Exercise orchestrates systemic metabolic and neuroimmune homeostasis via the brain-muscle-liver axis to slow down aging and neurodegeneration: a narrative review."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Review"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Aging",
+          "Exercise",
+          "Brain",
+          "Neurodegenerative Diseases",
+          "Homeostasis",
+          "Liver",
+          "Muscle, Skeletal",
+          "Animals"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations",
+          "proteostasis",
+          "nutrient_sensing",
+          "intercellular_communication"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:39259812",
+      "source": "pubmed",
+      "title": "Targeted partial reprogramming of age-associated cell states improves markers of health in mouse models of aging.",
+      "year": 2024,
+      "evidence_level": 3,
+      "study_type": "in_vitro",
+      "population_class": "human",
+      "endpoint_class": "clinical_intermediate",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "39259812",
+        "doi": "10.1126/scitranslmed.adg1777"
+      },
+      "citations": [
+        {
+          "pmid": "39259812",
+          "doi": "10.1126/scitranslmed.adg1777",
+          "title": "Targeted partial reprogramming of age-associated cell states improves markers of health in mouse models of aging."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Animals",
+          "Kruppel-Like Factor 4",
+          "Aging",
+          "Cellular Reprogramming",
+          "Disease Models, Animal",
+          "Cellular Senescence",
+          "Mice",
+          "Humans",
+          "Cyclin-Dependent Kinase Inhibitor p16",
+          "Biomarkers",
+          "Progeria",
+          "Dependovirus",
+          "Promoter Regions, Genetic"
+        ],
+        "hallmark_tags": [
+          "cellular_senescence",
+          "stem_cell_exhaustion",
+          "intercellular_communication"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:40642939",
+      "source": "pubmed",
+      "title": "Biomarkers of aging as it relates osteoarthritis: we can't improve what we can't measure.",
+      "year": 2025,
+      "evidence_level": 3,
+      "study_type": "observational",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "40642939",
+        "doi": "10.1080/03008207.2025.2528792"
+      },
+      "citations": [
+        {
+          "pmid": "40642939",
+          "doi": "10.1080/03008207.2025.2528792",
+          "title": "Biomarkers of aging as it relates osteoarthritis: we can't improve what we can't measure."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Review"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Osteoarthritis",
+          "Biomarkers",
+          "Aging",
+          "Animals",
+          "Chondrocytes"
+        ],
+        "hallmark_tags": [
+          "genomic_instability",
+          "epigenetic_alterations",
+          "cellular_senescence"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:38332583",
+      "source": "pubmed",
+      "title": "M2 macrophages secrete glutamate-containing extracellular vesicles to alleviate osteoporosis by reshaping osteoclast precursor fate.",
+      "year": 2024,
+      "evidence_level": 3,
+      "study_type": "in_vitro",
+      "population_class": "human",
+      "endpoint_class": "clinical_intermediate",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "38332583",
+        "doi": "10.1016/j.ymthe.2024.02.005"
+      },
+      "citations": [
+        {
+          "pmid": "38332583",
+          "doi": "10.1016/j.ymthe.2024.02.005",
+          "title": "M2 macrophages secrete glutamate-containing extracellular vesicles to alleviate osteoporosis by reshaping osteoclast precursor fate."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Osteoclasts",
+          "Glutamic Acid",
+          "Macrophages",
+          "Osteoporosis",
+          "Extracellular Vesicles"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations",
+          "intercellular_communication"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:40815481",
+      "source": "pubmed",
+      "title": "Integration of Vascular Smooth Muscle Cell Phenotypic Switching and Senescence.",
+      "year": 2025,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "mechanistic_only",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "40815481",
+        "doi": "10.1097/FJC.0000000000001752"
+      },
+      "citations": [
+        {
+          "pmid": "40815481",
+          "doi": "10.1097/FJC.0000000000001752",
+          "title": "Integration of Vascular Smooth Muscle Cell Phenotypic Switching and Senescence."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Systematic Review"
+        ],
+        "mesh_terms": [
+          "Cellular Senescence",
+          "Humans",
+          "Muscle, Smooth, Vascular",
+          "Animals",
+          "Myocytes, Smooth Muscle",
+          "Cell Transdifferentiation",
+          "Phenotype",
+          "Cardiovascular Diseases",
+          "Signal Transduction",
+          "Cell Plasticity",
+          "Senescence-Associated Secretory Phenotype",
+          "Vascular Calcification",
+          "Cell Proliferation"
+        ],
+        "hallmark_tags": [
+          "cellular_senescence",
+          "stem_cell_exhaustion"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:33049666",
+      "source": "pubmed",
+      "title": "From genoprotection to rejuvenation.",
+      "year": 2021,
+      "evidence_level": 3,
+      "study_type": "in_vitro",
+      "population_class": "human",
+      "endpoint_class": "clinical_intermediate",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "33049666",
+        "doi": "10.2741/4890"
+      },
+      "citations": [
+        {
+          "pmid": "33049666",
+          "doi": "10.2741/4890",
+          "title": "From genoprotection to rejuvenation."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Review"
+        ],
+        "mesh_terms": [
+          "Aging",
+          "Animals",
+          "Epigenesis, Genetic",
+          "Humans",
+          "Longevity",
+          "Rejuvenation",
+          "Signal Transduction"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations",
+          "nutrient_sensing",
+          "stem_cell_exhaustion"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:38102454",
+      "source": "pubmed",
+      "title": "Mechanisms, pathways and strategies for rejuvenation through epigenetic reprogramming.",
+      "year": 2024,
+      "evidence_level": 3,
+      "study_type": "in_vitro",
+      "population_class": "human",
+      "endpoint_class": "mechanistic_only",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "observational_risk_confounding"
+      ],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "38102454",
+        "doi": "10.1038/s43587-023-00539-2"
+      },
+      "citations": [
+        {
+          "pmid": "38102454",
+          "doi": "10.1038/s43587-023-00539-2",
+          "title": "Mechanisms, pathways and strategies for rejuvenation through epigenetic reprogramming."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Review"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Animals",
+          "Mice",
+          "Rejuvenation",
+          "Aging",
+          "Cellular Reprogramming",
+          "Induced Pluripotent Stem Cells",
+          "Epigenesis, Genetic"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations"
+        ]
+      }
+    }
+  ],
+  "trial_registry_rows": [],
+  "preclinical_anchors": [
+    {
+      "study_key": "pmid:23699511",
+      "source": "pubmed",
+      "title": "Paternal stress exposure alters sperm microRNA content and reprograms offspring HPA stress axis regulation.",
+      "year": 2013,
+      "evidence_level": 4,
+      "study_type": "rct",
+      "population_class": "animal",
+      "endpoint_class": "mechanistic_only",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "23699511",
+        "doi": "10.1523/JNEUROSCI.0914-13.2013"
+      },
+      "citations": [
+        {
+          "pmid": "23699511",
+          "doi": "10.1523/JNEUROSCI.0914-13.2013",
+          "title": "Paternal stress exposure alters sperm microRNA content and reprograms offspring HPA stress axis regulation."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Randomized Controlled Trial",
+          "Research Support, N.I.H., Extramural"
+        ],
+        "mesh_terms": [
+          "Acoustic Stimulation",
+          "Adaptation, Ocular",
+          "Analysis of Variance",
+          "Animals",
+          "Animals, Newborn",
+          "Citalopram",
+          "Disease Models, Animal",
+          "Female",
+          "Gene Expression Regulation",
+          "Hindlimb Suspension",
+          "Hypothalamo-Hypophyseal System",
+          "Male",
+          "Maze Learning",
+          "Mice",
+          "Mice, Inbred C57BL",
+          "MicroRNAs",
+          "Pituitary-Adrenal System",
+          "Pregnancy",
+          "Prenatal Exposure Delayed Effects",
+          "Reflex, Startle",
+          "Selective Serotonin Reuptake Inhibitors",
+          "Sex Factors",
+          "Spermatozoa",
+          "Stress, Psychological"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:34035273",
+      "source": "pubmed",
+      "title": "In vivo partial reprogramming of myofibers promotes muscle regeneration by remodeling the stem cell niche.",
+      "year": 2021,
+      "evidence_level": 4,
+      "study_type": "observational",
+      "population_class": "animal",
+      "endpoint_class": "mechanistic_only",
+      "effect_direction": "unknown",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "34035273",
+        "doi": "10.1038/s41467-021-23353-z"
+      },
+      "citations": [
+        {
+          "pmid": "34035273",
+          "doi": "10.1038/s41467-021-23353-z",
+          "title": "In vivo partial reprogramming of myofibers promotes muscle regeneration by remodeling the stem cell niche."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Research Support, N.I.H., Extramural",
+          "Research Support, Non-U.S. Gov't",
+          "Research Support, U.S. Gov't, Non-P.H.S."
+        ],
+        "mesh_terms": [
+          "Animals",
+          "Cell Differentiation",
+          "Cells, Cultured",
+          "Cellular Reprogramming",
+          "Female",
+          "Gene Expression",
+          "Kruppel-Like Factor 4",
+          "Kruppel-Like Transcription Factors",
+          "Mice, Transgenic",
+          "Myofibrils",
+          "Octamer Transcription Factor-3",
+          "Proto-Oncogene Proteins c-myc",
+          "Regeneration",
+          "SOXB1 Transcription Factors",
+          "Satellite Cells, Skeletal Muscle",
+          "Stem Cell Niche",
+          "Wnt4 Protein"
+        ],
+        "hallmark_tags": [
+          "stem_cell_exhaustion"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:38371924",
+      "source": "pubmed",
+      "title": "Next-generation direct reprogramming.",
+      "year": 2024,
+      "evidence_level": 5,
+      "study_type": "in_vitro",
+      "population_class": "cell",
+      "endpoint_class": "mechanistic_only",
+      "effect_direction": "unknown",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "38371924",
+        "doi": "10.3389/fcell.2024.1343106"
+      },
+      "citations": [
+        {
+          "pmid": "38371924",
+          "doi": "10.3389/fcell.2024.1343106",
+          "title": "Next-generation direct reprogramming."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Review"
+        ],
+        "mesh_terms": [],
+        "hallmark_tags": [
+          "epigenetic_alterations"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:38102202",
+      "source": "pubmed",
+      "title": "The Information Theory of Aging.",
+      "year": 2023,
+      "evidence_level": 5,
+      "study_type": "in_vitro",
+      "population_class": "cell",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "unknown",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "38102202",
+        "doi": "10.1038/s43587-023-00527-6"
+      },
+      "citations": [
+        {
+          "pmid": "38102202",
+          "doi": "10.1038/s43587-023-00527-6",
+          "title": "The Information Theory of Aging."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Review",
+          "Research Support, Non-U.S. Gov't",
+          "Research Support, N.I.H., Extramural"
+        ],
+        "mesh_terms": [
+          "Epigenesis, Genetic",
+          "DNA Methylation",
+          "Information Theory",
+          "Histones"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:38553564",
+      "source": "pubmed",
+      "title": "Restoration of neuronal progenitors by partial reprogramming in the aged neurogenic niche.",
+      "year": 2024,
+      "evidence_level": 4,
+      "study_type": "in_vitro",
+      "population_class": "animal",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "unknown",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "38553564",
+        "doi": "10.1038/s43587-024-00594-3"
+      },
+      "citations": [
+        {
+          "pmid": "38553564",
+          "doi": "10.1038/s43587-024-00594-3",
+          "title": "Restoration of neuronal progenitors by partial reprogramming in the aged neurogenic niche."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Mice",
+          "Animals",
+          "Neurons",
+          "Neurogenesis",
+          "Neural Stem Cells",
+          "Cell Differentiation",
+          "Cellular Reprogramming"
+        ],
+        "hallmark_tags": [
+          "stem_cell_exhaustion"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:39053462",
+      "source": "pubmed",
+      "title": "Innate immune training restores pro-reparative myeloid functions to promote remyelination in the aged central nervous system.",
+      "year": 2024,
+      "evidence_level": 4,
+      "study_type": "observational",
+      "population_class": "animal",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "39053462",
+        "doi": "10.1016/j.immuni.2024.07.001"
+      },
+      "citations": [
+        {
+          "pmid": "39053462",
+          "doi": "10.1016/j.immuni.2024.07.001",
+          "title": "Innate immune training restores pro-reparative myeloid functions to promote remyelination in the aged central nervous system."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Animals",
+          "Immunity, Innate",
+          "Mice",
+          "Aging",
+          "Remyelination",
+          "Microglia",
+          "Myeloid Cells",
+          "Central Nervous System",
+          "Mice, Inbred C57BL",
+          "Myelin Sheath",
+          "Epigenesis, Genetic",
+          "Demyelinating Diseases",
+          "Disease Models, Animal"
+        ],
+        "hallmark_tags": [
+          "epigenetic_alterations",
+          "intercellular_communication"
+        ]
+      }
+    }
+  ],
+  "key_flags": [
+    "observational_risk_confounding",
+    "indirect_endpoint",
+    "preclinical_translation_risk"
+  ],
+  "optional_source_status": []
+}

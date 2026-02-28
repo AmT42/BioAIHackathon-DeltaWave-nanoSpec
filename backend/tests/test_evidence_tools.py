@@ -137,12 +137,20 @@ def test_clinicaltrials_fetch_compact_fields_without_raw_by_default() -> None:
     out = _tool(tools, "clinicaltrials_fetch").handler({"ids": ["NCT00000001"]}, None)
 
     record = out["data"]["studies"][0]
+    assert out["data"]["records"][0]["nct_id"] == "NCT00000001"
     assert record["primary_completion_date"] == "2024-01-01"
     assert record["completion_date"] == "2024-06-01"
     assert record["results_first_posted_date"] == "2025-01-15"
     assert record["eligibility_summary"]
     assert record["arms_count"] == 2
     assert "raw_study" not in record
+
+
+def test_clinicaltrials_search_exposes_records_alias() -> None:
+    tools = build_trial_tools(get_settings(), TrialsHttp())
+    out = _tool(tools, "clinicaltrials_search").handler({"query": "rapamycin", "limit": 5}, None)
+    assert "records" in out["data"]
+    assert out["data"]["records"] == out["data"]["studies"]
 
 
 def test_clinicaltrials_fetch_includes_raw_when_requested() -> None:
@@ -258,4 +266,83 @@ def test_evidence_tool_chain_is_deterministic() -> None:
     )
 
     assert report["data"]["report_json"]["evidence_summary"]["score"] == grade_1["data"]["score"]
+    markdown = str(report["data"]["report_markdown"])
+    assert "## 1) Intervention Identity" in markdown
+    assert "## 4) Trial Registry Audit" in markdown
+    assert "## 8) Confidence Score + Trace" in markdown
+    assert "## 10) Limitations of this Automated Review" in markdown
+    assert "```json" in markdown
+    assert "None identified." in markdown
     assert report["source_meta"]["data_schema_version"] == "v2.1"
+
+
+def test_evidence_tools_emit_compatibility_aliases() -> None:
+    tools = build_evidence_tools()
+    classified = _tool(tools, "evidence_classify_pubmed_records").handler(
+        {
+            "records": [
+                {
+                    "pmid": "111",
+                    "title": "Randomized trial in older adults",
+                    "abstract": "Randomized controlled trial measured frailty and hospitalization.",
+                    "publication_types": ["Randomized Controlled Trial"],
+                    "mesh_terms": ["Humans"],
+                    "humans": True,
+                    "animals": False,
+                }
+            ]
+        },
+        None,
+    )
+    assert classified["data"]["classified_records"] == classified["data"]["records"]
+
+    ledger = _tool(tools, "evidence_build_ledger").handler({"pubmed_records": classified["data"]["records"]}, None)
+    assert ledger["data"]["ledger"]["records"] == ledger["data"]["records"]
+
+    grade = _tool(tools, "evidence_grade").handler({"ledger": ledger["data"]}, None)
+    assert grade["data"]["grade"]["score"] == grade["data"]["score"]
+
+    gaps = _tool(tools, "evidence_gap_map").handler({"ledger": ledger["data"], "grade": grade["data"]}, None)
+    assert gaps["data"]["gap_map"]["missing_levels"] == gaps["data"]["missing_levels"]
+
+
+def test_trial_classifier_accepts_explicit_empty_records_list() -> None:
+    tools = build_evidence_tools()
+    out = _tool(tools, "evidence_classify_trial_records").handler({"records": []}, None)
+    assert out["data"]["records"] == []
+
+
+def test_grade_and_render_accept_ledger_records_list_shape() -> None:
+    tools = build_evidence_tools()
+    classified = _tool(tools, "evidence_classify_pubmed_records").handler(
+        {
+            "records": [
+                {
+                    "pmid": "111",
+                    "title": "Randomized trial in older adults",
+                    "abstract": "Randomized controlled trial measured frailty and hospitalization.",
+                    "publication_types": ["Randomized Controlled Trial"],
+                    "mesh_terms": ["Humans"],
+                    "humans": True,
+                    "animals": False,
+                    "publication_year": 2024,
+                }
+            ]
+        },
+        None,
+    )
+    ledger = _tool(tools, "evidence_build_ledger").handler({"pubmed_records": classified["data"]["records"]}, None)
+    grade = _tool(tools, "evidence_grade").handler({"ledger": ledger["data"]["records"]}, None)
+    assert grade["data"]["score"] > 8.0
+
+    report = _tool(tools, "evidence_render_report").handler(
+        {
+            "intervention": {"label": "test intervention"},
+            "ledger": ledger["data"]["records"],
+            "grade": grade["data"],
+            "gap_map": {"missing_levels": [], "missing_endpoints": [], "next_best_studies": [], "mismatch_cautions": []},
+        },
+        None,
+    )
+    pyramid = report["data"]["report_json"]["evidence_pyramid"]
+    assert pyramid["level_2"] == 1

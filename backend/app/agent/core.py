@@ -99,6 +99,55 @@ _CODE_UPDATE_REPROMPT_NOTICE = (
     "Runtime code was updated during this turn. "
     "Please send another prompt so the next turn runs with the updated code."
 )
+_EVIDENCE_GUARD_MAX_RETRIES = 2
+_EVIDENCE_REQUEST_HINTS = (
+    "aging",
+    "ageing",
+    "longevity",
+    "healthspan",
+    "lifespan",
+    "frailty",
+    "senescence",
+    "inflammaging",
+    "intervention",
+    "confidence score",
+    "evidence report",
+    "rapamycin",
+    "metformin",
+    "nmn",
+    "nr ",
+    "nad",
+    "senolytic",
+    "hyperbaric",
+    "hbot",
+    "mtor",
+    "yamanaka",
+    "reprogramming",
+)
+_EVIDENCE_GUARD_TOOL_NAMES = (
+    "evidence_build_ledger",
+    "evidence_grade",
+    "evidence_gap_map",
+    "evidence_render_report",
+)
+_NON_EVIDENCE_HINTS = (
+    "code",
+    "coding",
+    "prompt",
+    "runtime",
+    "branch",
+    "git",
+    "debug",
+    "fix",
+    "test",
+    "pytest",
+    "frontend",
+    "backend",
+    "typescript",
+    "javascript",
+    "python",
+    "refactor",
+)
 
 
 def _get_repl_session_manager(settings: Settings) -> ReplSessionManager:
@@ -179,6 +228,33 @@ def _is_runtime_sensitive_path(path: str, prefixes: tuple[str, ...]) -> bool:
         normalized_prefix = _normalize_rel_path(prefix).lower().rstrip("/")
         if normalized_prefix and (normalized == normalized_prefix or normalized.startswith(f"{normalized_prefix}/")):
             return True
+    return False
+
+
+def _supports_structured_evidence_pipeline(tools: ToolRegistry) -> bool:
+    for name in _EVIDENCE_GUARD_TOOL_NAMES:
+        if tools.get_spec(name) is None:
+            return False
+    return True
+
+
+def _looks_like_evidence_report_request(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    if any(hint in lowered for hint in _NON_EVIDENCE_HINTS):
+        return False
+    if any(hint in lowered for hint in _EVIDENCE_REQUEST_HINTS):
+        return True
+
+    words = [item for item in lowered.replace("/", " ").replace("-", " ").split() if item]
+    if not words:
+        return False
+    if len(words) <= 4 and all(any(ch.isalpha() for ch in item) for item in words):
+        stop_words = {"hi", "hello", "hey", "thanks", "thank", "continue", "status", "help"}
+        if any(item in stop_words for item in words):
+            return False
+        return True
     return False
 
 
@@ -393,6 +469,13 @@ class AgentCore:
         )
         changed_files: set[str] = set()
         runtime_dirty_files: set[str] = set()
+        structured_evidence_required = (
+            _supports_structured_evidence_pipeline(self.tools)
+            and _looks_like_evidence_report_request(user_message)
+        )
+        evidence_guard_retries = 0
+        evidence_tools_seen: set[str] = set()
+        structured_report_rendered = False
 
         async def _capture_runtime_changes() -> None:
             if not git_tracking_enabled:
@@ -761,6 +844,27 @@ class AgentCore:
             )
 
             if not normalized_tool_calls:
+                if structured_evidence_required and not structured_report_rendered:
+                    if evidence_guard_retries < _EVIDENCE_GUARD_MAX_RETRIES:
+                        evidence_guard_retries += 1
+                        await self.store.append_event(
+                            thread_id=thread_id,
+                            role=ConversationEventRole.SYSTEM,
+                            kind=ConversationEventKind.TEXT,
+                            content={
+                                "type": "text",
+                                "text": (
+                                    "Guardrail: for longevity evidence grading, finalize only after running the "
+                                    "deterministic evidence chain (`evidence_build_ledger` -> `evidence_grade` -> "
+                                    "`evidence_gap_map` -> `evidence_render_report`). Use `report_markdown` and "
+                                    "`report_json` from `evidence_render_report` as final outputs."
+                                ),
+                            },
+                            visible_to_model=True,
+                        )
+                        await self.store.session.commit()
+                        await self.store._log_thread_snapshot(thread_id)
+                        continue
                 iteration_limit_exhausted = False
                 break
 
@@ -1117,6 +1221,9 @@ class AgentCore:
                     kind = str(nested.get("kind") or "")
                     nested_call_id = str(nested.get("call_id") or "")
                     nested_tool_name = str(nested.get("tool_name") or "tool")
+                    evidence_tools_seen.add(nested_tool_name)
+                    if nested_tool_name == "evidence_render_report":
+                        structured_report_rendered = True
                     if not nested_call_id:
                         continue
                     if kind == "start":
@@ -1275,6 +1382,12 @@ class AgentCore:
                 if final_text.strip()
                 else _CODE_UPDATE_REPROMPT_NOTICE
             )
+        elif structured_evidence_required and not structured_report_rendered:
+            completion_override = (
+                f"{final_text.rstrip()}\n\n"
+                "Guardrail warning: deterministic evidence rendering was not completed "
+                "(`evidence_render_report` missing), so this answer may be incomplete."
+            ).strip()
 
         completion_message: dict[str, Any] | None = None
         if last_assistant_message_id:
@@ -1299,6 +1412,10 @@ class AgentCore:
                 metadata["changed_files"] = sorted(changed_files)[:200]
                 metadata["runtime_dirty_files"] = sorted(runtime_dirty_files)[:200]
                 metadata["controlled_reload_enabled"] = bool(self.settings.repl_controlled_reload_enabled)
+                metadata["structured_evidence_required"] = structured_evidence_required
+                metadata["structured_report_rendered"] = structured_report_rendered
+                metadata["evidence_guard_retries"] = evidence_guard_retries
+                metadata["evidence_tools_seen"] = sorted(evidence_tools_seen)[:200]
 
                 updated_last = await self.store.update_message(
                     message_id=last_message.id,

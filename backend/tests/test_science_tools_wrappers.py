@@ -142,6 +142,18 @@ def test_literature_wrappers_pubmed_and_openalex() -> None:
     assert oa["ids"] == ["https://openalex.org/W1"]
 
 
+def test_openalex_get_works_accepts_pmid_style_ids() -> None:
+    settings = replace(get_settings(), openalex_api_key="test-key")
+    tools = build_literature_tools(settings, FakeHttp())
+    ctx = ToolContext(thread_id="t", run_id="r", tool_use_id="u")
+
+    out = _tool(tools, "openalex_get_works").handler({"ids": ["12345", "PMID:12345"]}, ctx)
+
+    records = out["data"]["records"]
+    assert len(records) == 2
+    assert all(record.get("pmid") == "12345" for record in records)
+
+
 def test_concept_merge_prefers_rxnorm_ingredient() -> None:
     tools = build_normalization_tools(FakeHttp())
     ctx = ToolContext(thread_id="t", run_id="r", tool_use_id="u")

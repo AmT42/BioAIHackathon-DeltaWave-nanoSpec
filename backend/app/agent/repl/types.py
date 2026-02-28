@@ -64,6 +64,18 @@ class IdListHandle(Sequence[str]):
 class ToolResultHandle:
     """Programmatic view over normalized tool output."""
 
+    _RECORD_KEY_PRIORITY = (
+        "records",
+        "items",
+        "studies",
+        "entries",
+        "works",
+        "links",
+        "hits",
+        "candidates",
+        "related",
+    )
+
     def __init__(self, *, tool_name: str, payload: dict[str, Any], raw_result: dict[str, Any]) -> None:
         self.tool_name = tool_name
         self._payload = payload
@@ -87,36 +99,28 @@ class ToolResultHandle:
             return []
         return [RecordRow(item) for item in value if isinstance(item, dict)]
 
+    def _first_available_records(self, *keys: str) -> list[dict[str, Any]]:
+        for key in keys:
+            rows = self._as_records(key)
+            if rows:
+                return rows
+        return []
+
     @property
     def records(self) -> list[dict[str, Any]]:
-        direct = self._as_records("records")
-        if direct:
-            return direct
-        candidates = self._as_records("candidates")
-        if candidates:
-            return candidates
-        return self._as_records("hits")
+        return self._first_available_records(*self._RECORD_KEY_PRIORITY)
 
     @property
     def candidates(self) -> list[dict[str, Any]]:
-        direct = self._as_records("candidates")
-        if direct:
-            return direct
-        return self.records
+        return self._first_available_records("candidates", *self._RECORD_KEY_PRIORITY)
 
     @property
     def items(self) -> list[dict[str, Any]]:
-        records = self.records
-        if records:
-            return records
-        return self._as_records("items")
+        return self._first_available_records("items", *self._RECORD_KEY_PRIORITY)
 
     @property
     def studies(self) -> list[dict[str, Any]]:
-        records = self.records
-        if records:
-            return records
-        return self._as_records("studies")
+        return self._first_available_records("studies", *self._RECORD_KEY_PRIORITY)
 
     @property
     def citations(self) -> list[dict[str, Any]]:
@@ -176,6 +180,15 @@ class ToolResultHandle:
         raise TypeError("ToolResultHandle data is not a mapping")
 
     def __getattr__(self, name: str) -> Any:
+        # Compatibility aliases for common LLM-generated counter access patterns.
+        if name == "ids_count":
+            return len(self.ids)
+        if name == "records_count":
+            return len(self.records)
+        if name == "items_count":
+            return len(self.items)
+        if name == "studies_count":
+            return len(self.studies)
         data = self._payload.get("data")
         if isinstance(data, dict) and name in data:
             return data[name]

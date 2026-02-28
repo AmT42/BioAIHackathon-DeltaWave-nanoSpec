@@ -1,0 +1,1712 @@
+{
+  "intervention": {
+    "label": "NAD+ Precursors (NMN / NR)"
+  },
+  "claim_context": null,
+  "evidence_summary": {
+    "score": 65.0,
+    "label": "C",
+    "confidence": "moderate",
+    "notes": []
+  },
+  "evidence_pyramid": {
+    "level_1": 6,
+    "level_2": 38,
+    "level_3": 6,
+    "level_4": 7,
+    "level_5": 4,
+    "level_6": 0
+  },
+  "counts_by_source": {
+    "pubmed": 31,
+    "clinicaltrials": 30
+  },
+  "counts_by_endpoint": {
+    "clinical_hard": 27,
+    "surrogate_biomarker": 9,
+    "clinical_intermediate": 6,
+    "mechanistic_only": 19
+  },
+  "scoring_trace": {
+    "ces": 70.0,
+    "mp": 23.0,
+    "final_confidence": 65.0,
+    "penalties": [
+      {
+        "kind": "quality",
+        "flag": "observational_risk_confounding",
+        "count": 4,
+        "delta": -6.0
+      },
+      {
+        "kind": "quality",
+        "flag": "preclinical_translation_risk",
+        "count": 11,
+        "delta": -4.0
+      },
+      {
+        "kind": "quality",
+        "flag": "small_n_or_unknown",
+        "count": 11,
+        "delta": -8.0
+      },
+      {
+        "kind": "quality",
+        "flag": "not_completed",
+        "count": 16,
+        "delta": -8.0
+      },
+      {
+        "kind": "quality",
+        "flag": "no_registry_results",
+        "count": 26,
+        "delta": -6.0
+      }
+    ],
+    "bonuses": [
+      {
+        "kind": "consistency",
+        "reason": "level1_plus_level2_present",
+        "delta": 4.0
+      }
+    ],
+    "caps_applied": [],
+    "components": {
+      "level_counts": {
+        "1": 6,
+        "2": 38,
+        "3": 6,
+        "4": 7,
+        "5": 4
+      },
+      "ces_components": {
+        "level_1": 40.0,
+        "level_2": 28.0,
+        "level_3": 16.0,
+        "level_4": 8.0,
+        "level_5": 4.0
+      },
+      "endpoint_counts": {
+        "clinical_hard": 27,
+        "surrogate_biomarker": 9,
+        "clinical_intermediate": 6,
+        "mechanistic_only": 19
+      },
+      "quality_flags": {
+        "preclinical_translation_risk": 11,
+        "observational_risk_confounding": 4,
+        "no_registry_results": 26,
+        "small_n_or_unknown": 11,
+        "not_completed": 16
+      },
+      "hallmark_tag_count": 6,
+      "human_count": 56,
+      "quality_penalty": 32.0,
+      "consistency_bonus": 4.0
+    }
+  },
+  "coverage_gaps": [],
+  "gap_map": {
+    "missing_levels": [],
+    "missing_endpoints": [],
+    "next_best_studies": [],
+    "mismatch_cautions": [],
+    "level_counts": {
+      "1": 6,
+      "2": 38,
+      "3": 6,
+      "4": 7,
+      "5": 4
+    },
+    "endpoint_counts": {
+      "clinical_hard": 27,
+      "surrogate_biomarker": 9,
+      "clinical_intermediate": 6,
+      "mechanistic_only": 19
+    }
+  },
+  "records": [
+    {
+      "study_key": "pmid:31917996",
+      "source": "pubmed",
+      "title": "NAD+ therapy in age-related degenerative disorders: A benefit/risk analysis.",
+      "year": 2020,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "31917996",
+        "doi": "10.1016/j.exger.2020.110831"
+      },
+      "citations": [
+        {
+          "pmid": "31917996",
+          "doi": "10.1016/j.exger.2020.110831",
+          "title": "NAD+ therapy in age-related degenerative disorders: A benefit/risk analysis."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Research Support, Non-U.S. Gov't",
+          "Systematic Review"
+        ],
+        "mesh_terms": [
+          "Aging",
+          "Animals",
+          "Humans",
+          "Inflammation",
+          "Mice",
+          "NAD",
+          "Neurodegenerative Diseases",
+          "Niacinamide",
+          "Nicotinamide Mononucleotide",
+          "Oxidative Stress",
+          "Pyridinium Compounds",
+          "Rats",
+          "Risk Assessment"
+        ],
+        "hallmark_tags": [
+          "genomic_instability",
+          "cellular_senescence",
+          "intercellular_communication"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:39185644",
+      "source": "pubmed",
+      "title": "Effects of Nicotinamide Mononucleotide Supplementation on Muscle and Liver Functions Among the Middle-aged and Elderly: A Systematic Review and Meta-analysis of Randomized Controlled Trials.",
+      "year": 2025,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "unknown",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "39185644",
+        "doi": "10.2174/0113892010306242240808094303"
+      },
+      "citations": [
+        {
+          "pmid": "39185644",
+          "doi": "10.2174/0113892010306242240808094303",
+          "title": "Effects of Nicotinamide Mononucleotide Supplementation on Muscle and Liver Functions Among the Middle-aged and Elderly: A Systematic Review and Meta-analysis of Randomized Controlled Trials."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Systematic Review",
+          "Meta-Analysis"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Randomized Controlled Trials as Topic",
+          "Nicotinamide Mononucleotide",
+          "Aged",
+          "Liver",
+          "Middle Aged",
+          "Dietary Supplements",
+          "Muscle, Skeletal",
+          "Aging"
+        ],
+        "hallmark_tags": [
+          "nutrient_sensing"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:37954044",
+      "source": "pubmed",
+      "title": "Exercise training upregulates intracellular nicotinamide phosphoribosyltransferase expression in humans: a systematic review with meta-analysis.",
+      "year": 2023,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "surrogate_biomarker",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "37954044",
+        "doi": "10.3389/fpubh.2023.1287421"
+      },
+      "citations": [
+        {
+          "pmid": "37954044",
+          "doi": "10.3389/fpubh.2023.1287421",
+          "title": "Exercise training upregulates intracellular nicotinamide phosphoribosyltransferase expression in humans: a systematic review with meta-analysis."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Meta-Analysis",
+          "Systematic Review",
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Aging",
+          "Exercise",
+          "Muscle, Skeletal",
+          "NAD",
+          "Nicotinamide Phosphoribosyltransferase"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:35920994",
+      "source": "pubmed",
+      "title": "Impact of nutraceuticals and dietary supplements on mitochondria modifications in healthy aging: a systematic review of randomized controlled trials.",
+      "year": 2022,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "unknown",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "35920994",
+        "doi": "10.1007/s40520-022-02203-y"
+      },
+      "citations": [
+        {
+          "pmid": "35920994",
+          "doi": "10.1007/s40520-022-02203-y",
+          "title": "Impact of nutraceuticals and dietary supplements on mitochondria modifications in healthy aging: a systematic review of randomized controlled trials."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Systematic Review",
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Aged",
+          "Healthy Aging",
+          "Randomized Controlled Trials as Topic",
+          "Dietary Supplements",
+          "Fatty Acids, Omega-3",
+          "Mitochondria"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:40033213",
+      "source": "pubmed",
+      "title": "A systematic review of the therapeutic potential of nicotinamide adenine dinucleotide precursors for cognitive diseases in preclinical rodent models.",
+      "year": 2025,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "40033213",
+        "doi": "10.1186/s12868-025-00937-9"
+      },
+      "citations": [
+        {
+          "pmid": "40033213",
+          "doi": "10.1186/s12868-025-00937-9",
+          "title": "A systematic review of the therapeutic potential of nicotinamide adenine dinucleotide precursors for cognitive diseases in preclinical rodent models."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Systematic Review"
+        ],
+        "mesh_terms": [
+          "Animals",
+          "NAD",
+          "Disease Models, Animal",
+          "Cognitive Dysfunction",
+          "Humans",
+          "Oxidative Stress",
+          "Rats",
+          "Mitochondria"
+        ],
+        "hallmark_tags": [
+          "intercellular_communication"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:39116016",
+      "source": "pubmed",
+      "title": "Efficacy of oral nicotinamide mononucleotide supplementation on glucose and lipid metabolism for adults: a systematic review with meta-analysis on randomized controlled trials.",
+      "year": 2025,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "clinical_intermediate",
+      "effect_direction": "null",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "39116016",
+        "doi": "10.1080/10408398.2024.2387324"
+      },
+      "citations": [
+        {
+          "pmid": "39116016",
+          "doi": "10.1080/10408398.2024.2387324",
+          "title": "Efficacy of oral nicotinamide mononucleotide supplementation on glucose and lipid metabolism for adults: a systematic review with meta-analysis on randomized controlled trials."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Systematic Review",
+          "Meta-Analysis"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Dietary Supplements",
+          "Randomized Controlled Trials as Topic",
+          "Blood Glucose",
+          "Adult",
+          "Lipid Metabolism",
+          "Triglycerides",
+          "NAD",
+          "Administration, Oral"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:36482258",
+      "source": "pubmed",
+      "title": "The efficacy and safety of \u03b2-nicotinamide mononucleotide (NMN) supplementation in healthy middle-aged adults: a randomized, multicenter, double-blind, placebo-controlled, parallel-group, dose-dependent clinical trial.",
+      "year": 2023,
+      "evidence_level": 4,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "36482258",
+        "doi": "10.1007/s11357-022-00705-1"
+      },
+      "citations": [
+        {
+          "pmid": "36482258",
+          "doi": "10.1007/s11357-022-00705-1",
+          "title": "The efficacy and safety of \u03b2-nicotinamide mononucleotide (NMN) supplementation in healthy middle-aged adults: a randomized, multicenter, double-blind, placebo-controlled, parallel-group, dose-dependent clinical trial."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Randomized Controlled Trial",
+          "Multicenter Study",
+          "Journal Article",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Animals",
+          "Humans",
+          "Middle Aged",
+          "Nicotinamide Mononucleotide",
+          "NAD",
+          "Treatment Outcome",
+          "Double-Blind Method",
+          "Dietary Supplements"
+        ],
+        "hallmark_tags": [
+          "nutrient_sensing"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:33888596",
+      "source": "pubmed",
+      "title": "Nicotinamide mononucleotide increases muscle insulin sensitivity in prediabetic women.",
+      "year": 2021,
+      "evidence_level": 2,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "33888596",
+        "doi": "10.1126/science.abe9985"
+      },
+      "citations": [
+        {
+          "pmid": "33888596",
+          "doi": "10.1126/science.abe9985",
+          "title": "Nicotinamide mononucleotide increases muscle insulin sensitivity in prediabetic women."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Randomized Controlled Trial",
+          "Research Support, N.I.H., Extramural",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Aged",
+          "Body Composition",
+          "Dietary Supplements",
+          "Double-Blind Method",
+          "Female",
+          "Humans",
+          "Insulin",
+          "Insulin Resistance",
+          "Middle Aged",
+          "Mitochondria, Muscle",
+          "Muscle, Skeletal",
+          "NAD",
+          "Nicotinamide Mononucleotide",
+          "Obesity",
+          "Overweight",
+          "Postmenopause",
+          "Prediabetic State",
+          "RNA-Seq",
+          "Signal Transduction"
+        ],
+        "hallmark_tags": [
+          "nutrient_sensing"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:36740954",
+      "source": "pubmed",
+      "title": "Nicotinamide Adenine Dinucleotide Augmentation in Overweight or Obese Middle-Aged and Older Adults: A Physiologic Study.",
+      "year": 2023,
+      "evidence_level": 2,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "36740954",
+        "doi": "10.1210/clinem/dgad027"
+      },
+      "citations": [
+        {
+          "pmid": "36740954",
+          "doi": "10.1210/clinem/dgad027",
+          "title": "Nicotinamide Adenine Dinucleotide Augmentation in Overweight or Obese Middle-Aged and Older Adults: A Physiologic Study."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Randomized Controlled Trial",
+          "Journal Article",
+          "Research Support, N.I.H., Extramural",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Middle Aged",
+          "Humans",
+          "Aged",
+          "Overweight",
+          "NAD",
+          "Nicotinamide Mononucleotide",
+          "Insulin Resistance",
+          "Obesity",
+          "Body Weight",
+          "Cholesterol"
+        ],
+        "hallmark_tags": [
+          "nutrient_sensing"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:29599478",
+      "source": "pubmed",
+      "title": "Chronic\u00a0nicotinamide riboside supplementation is well-tolerated and elevates NAD+ in healthy middle-aged and older adults.",
+      "year": 2018,
+      "evidence_level": 2,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "29599478",
+        "doi": "10.1038/s41467-018-03421-7"
+      },
+      "citations": [
+        {
+          "pmid": "29599478",
+          "doi": "10.1038/s41467-018-03421-7",
+          "title": "Chronic\u00a0nicotinamide riboside supplementation is well-tolerated and elevates NAD+ in healthy middle-aged and older adults."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Randomized Controlled Trial",
+          "Research Support, N.I.H., Extramural"
+        ],
+        "mesh_terms": [
+          "Aged",
+          "Blood Pressure",
+          "Caloric Restriction",
+          "Double-Blind Method",
+          "Female",
+          "Humans",
+          "Male",
+          "Middle Aged",
+          "NAD",
+          "Niacinamide",
+          "Pyridinium Compounds",
+          "Vascular Stiffness"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:31412242",
+      "source": "pubmed",
+      "title": "Nicotinamide Riboside Augments the Aged Human Skeletal Muscle NAD+ Metabolome and Induces Transcriptomic and Anti-inflammatory Signatures.",
+      "year": 2019,
+      "evidence_level": 2,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "surrogate_biomarker",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "31412242",
+        "doi": "10.1016/j.celrep.2019.07.043"
+      },
+      "citations": [
+        {
+          "pmid": "31412242",
+          "doi": "10.1016/j.celrep.2019.07.043",
+          "title": "Nicotinamide Riboside Augments the Aged Human Skeletal Muscle NAD+ Metabolome and Induces Transcriptomic and Anti-inflammatory Signatures."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Randomized Controlled Trial",
+          "Research Support, N.I.H., Extramural",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Aged",
+          "Aged, 80 and over",
+          "Aging",
+          "Anti-Inflammatory Agents",
+          "Cross-Sectional Studies",
+          "Cytokines",
+          "Double-Blind Method",
+          "Humans",
+          "Male",
+          "Metabolome",
+          "Muscle, Skeletal",
+          "NAD",
+          "Niacinamide",
+          "Pyridinium Compounds",
+          "Transcriptome"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:31685720",
+      "source": "pubmed",
+      "title": "Effect of oral administration of nicotinamide mononucleotide on clinical parameters and nicotinamide metabolite levels in healthy Japanese men.",
+      "year": 2020,
+      "evidence_level": 5,
+      "study_type": "clinical_trial",
+      "population_class": "human",
+      "endpoint_class": "clinical_intermediate",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "31685720",
+        "doi": "10.1507/endocrj.EJ19-0313"
+      },
+      "citations": [
+        {
+          "pmid": "31685720",
+          "doi": "10.1507/endocrj.EJ19-0313",
+          "title": "Effect of oral administration of nicotinamide mononucleotide on clinical parameters and nicotinamide metabolite levels in healthy Japanese men."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Clinical Trial",
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Administration, Oral",
+          "Adult",
+          "Bilirubin",
+          "Blood Glucose",
+          "Blood Pressure",
+          "Body Temperature",
+          "Chlorides",
+          "Chromatography, Liquid",
+          "Creatinine",
+          "Diagnostic Techniques, Ophthalmological",
+          "Dose-Response Relationship, Drug",
+          "Electrocardiography",
+          "Healthy Volunteers",
+          "Heart Rate",
+          "Humans",
+          "Intraocular Pressure",
+          "Japan",
+          "Male",
+          "Middle Aged",
+          "Niacinamide",
+          "Nicotinamide Mononucleotide",
+          "Oxygen",
+          "Pyridones",
+          "Sleep",
+          "Tandem Mass Spectrometry",
+          "Visual Acuity"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:36797393",
+      "source": "pubmed",
+      "title": "Nicotinamide adenine dinucleotide metabolism and arterial stiffness after long-term nicotinamide mononucleotide supplementation: a randomized, double-blind, placebo-controlled trial.",
+      "year": 2023,
+      "evidence_level": 4,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "null",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "36797393",
+        "doi": "10.1038/s41598-023-29787-3"
+      },
+      "citations": [
+        {
+          "pmid": "36797393",
+          "doi": "10.1038/s41598-023-29787-3",
+          "title": "Nicotinamide adenine dinucleotide metabolism and arterial stiffness after long-term nicotinamide mononucleotide supplementation: a randomized, double-blind, placebo-controlled trial."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Randomized Controlled Trial",
+          "Journal Article",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Adult",
+          "Animals",
+          "Humans",
+          "Middle Aged",
+          "Dietary Supplements",
+          "NAD",
+          "Nicotinamide Mononucleotide",
+          "Pulse Wave Analysis",
+          "Vascular Stiffness",
+          "Double-Blind Method"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:39548320",
+      "source": "pubmed",
+      "title": "Effect of nicotinamide riboside on airway inflammation in COPD: a randomized, placebo-controlled trial.",
+      "year": 2024,
+      "evidence_level": 5,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "39548320",
+        "doi": "10.1038/s43587-024-00758-1"
+      },
+      "citations": [
+        {
+          "pmid": "39548320",
+          "doi": "10.1038/s43587-024-00758-1",
+          "title": "Effect of nicotinamide riboside on airway inflammation in COPD: a randomized, placebo-controlled trial."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Randomized Controlled Trial"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Pyridinium Compounds",
+          "Niacinamide",
+          "Pulmonary Disease, Chronic Obstructive",
+          "Male",
+          "Female",
+          "Aged",
+          "Double-Blind Method",
+          "Middle Aged",
+          "Interleukin-8",
+          "Inflammation",
+          "Sputum",
+          "Interleukin-6",
+          "NAD",
+          "Treatment Outcome"
+        ],
+        "hallmark_tags": [
+          "genomic_instability",
+          "epigenetic_alterations",
+          "cellular_senescence",
+          "intercellular_communication"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:36515353",
+      "source": "pubmed",
+      "title": "Oral nicotinamide riboside raises NAD+ and lowers biomarkers of neurodegenerative pathology in plasma extracellular vesicles enriched for neuronal origin.",
+      "year": 2023,
+      "evidence_level": 5,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_intermediate",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "36515353",
+        "doi": "10.1111/acel.13754"
+      },
+      "citations": [
+        {
+          "pmid": "36515353",
+          "doi": "10.1111/acel.13754",
+          "title": "Oral nicotinamide riboside raises NAD+ and lowers biomarkers of neurodegenerative pathology in plasma extracellular vesicles enriched for neuronal origin."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Randomized Controlled Trial",
+          "Journal Article",
+          "Research Support, N.I.H., Extramural",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Aged",
+          "Humans",
+          "Biomarkers",
+          "Extracellular Vesicles",
+          "Insulin",
+          "NAD",
+          "Neurodegenerative Diseases",
+          "Niacinamide",
+          "Pyridinium Compounds"
+        ],
+        "hallmark_tags": [
+          "nutrient_sensing"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:35998039",
+      "source": "pubmed",
+      "title": "A randomized placebo-controlled trial of nicotinamide riboside and pterostilbene supplementation in experimental muscle injury in elderly individuals.",
+      "year": 2022,
+      "evidence_level": 2,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "35998039",
+        "doi": "10.1172/jci.insight.158314"
+      },
+      "citations": [
+        {
+          "pmid": "35998039",
+          "doi": "10.1172/jci.insight.158314",
+          "title": "A randomized placebo-controlled trial of nicotinamide riboside and pterostilbene supplementation in experimental muscle injury in elderly individuals."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Randomized Controlled Trial",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Aged",
+          "Creatine Kinase, MM Form",
+          "Dietary Supplements",
+          "Humans",
+          "Muscle, Skeletal",
+          "Muscular Diseases",
+          "Myoglobin",
+          "Myosin Heavy Chains",
+          "Niacinamide",
+          "Pyridinium Compounds",
+          "Stilbenes"
+        ],
+        "hallmark_tags": [
+          "stem_cell_exhaustion"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:36443648",
+      "source": "pubmed",
+      "title": "Effects of nicotinamide mononucleotide on older patients with diabetes and impaired physical performance: A prospective, placebo-controlled, double-blind study.",
+      "year": 2023,
+      "evidence_level": 2,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "null",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "36443648",
+        "doi": "10.1111/ggi.14513"
+      },
+      "citations": [
+        {
+          "pmid": "36443648",
+          "doi": "10.1111/ggi.14513",
+          "title": "Effects of nicotinamide mononucleotide on older patients with diabetes and impaired physical performance: A prospective, placebo-controlled, double-blind study."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Randomized Controlled Trial",
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Male",
+          "Diabetes Mellitus",
+          "Double-Blind Method",
+          "NAD",
+          "Nicotinamide Mononucleotide",
+          "Prospective Studies",
+          "Humans",
+          "Aged",
+          "Hand Strength",
+          "Walking Speed"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:40459998",
+      "source": "pubmed",
+      "title": "Nicotinamide Riboside Supplementation Benefits in Patients With Werner Syndrome: A Double-Blind Randomized Crossover Placebo-Controlled Trial.",
+      "year": 2025,
+      "evidence_level": 2,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "40459998",
+        "doi": "10.1111/acel.70093"
+      },
+      "citations": [
+        {
+          "pmid": "40459998",
+          "doi": "10.1111/acel.70093",
+          "title": "Nicotinamide Riboside Supplementation Benefits in Patients With Werner Syndrome: A Double-Blind Randomized Crossover Placebo-Controlled Trial."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Randomized Controlled Trial"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Niacinamide",
+          "Double-Blind Method",
+          "Werner Syndrome",
+          "Male",
+          "Female",
+          "Cross-Over Studies",
+          "Dietary Supplements",
+          "Middle Aged",
+          "Pyridinium Compounds",
+          "Adult"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:35182418",
+      "source": "pubmed",
+      "title": "MIB-626, an Oral Formulation of a Microcrystalline Unique Polymorph of \u03b2-Nicotinamide Mononucleotide, Increases Circulating Nicotinamide Adenine Dinucleotide and its Metabolome in Middle-Aged and Older Adults.",
+      "year": 2023,
+      "evidence_level": 2,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "35182418",
+        "doi": "10.1093/gerona/glac049"
+      },
+      "citations": [
+        {
+          "pmid": "35182418",
+          "doi": "10.1093/gerona/glac049",
+          "title": "MIB-626, an Oral Formulation of a Microcrystalline Unique Polymorph of \u03b2-Nicotinamide Mononucleotide, Increases Circulating Nicotinamide Adenine Dinucleotide and its Metabolome in Middle-Aged and Older Adults."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Randomized Controlled Trial",
+          "Journal Article",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Middle Aged",
+          "Aged",
+          "NAD",
+          "Nicotinamide Mononucleotide",
+          "Metabolome",
+          "Mass Spectrometry",
+          "Body Mass Index"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:40479886",
+      "source": "pubmed",
+      "title": "Effects of NAD+ supplementation with oral nicotinamide riboside on vascular health and cognitive function in older adults with peripheral artery disease: Results from a pilot 4-week open-label clinical trial.",
+      "year": 2025,
+      "evidence_level": 2,
+      "study_type": "clinical_trial",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "40479886",
+        "doi": "10.1016/j.jpet.2025.103607"
+      },
+      "citations": [
+        {
+          "pmid": "40479886",
+          "doi": "10.1016/j.jpet.2025.103607",
+          "title": "Effects of NAD+ supplementation with oral nicotinamide riboside on vascular health and cognitive function in older adults with peripheral artery disease: Results from a pilot 4-week open-label clinical trial."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Clinical Trial"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Pilot Projects",
+          "Niacinamide",
+          "Aged",
+          "Male",
+          "Female",
+          "Cognition",
+          "NAD",
+          "Peripheral Arterial Disease",
+          "Dietary Supplements",
+          "Pyridinium Compounds",
+          "Administration, Oral",
+          "Oxidative Stress",
+          "Middle Aged",
+          "Mitochondria",
+          "Aged, 80 and over",
+          "Endothelium, Vascular"
+        ],
+        "hallmark_tags": []
+      }
+    }
+  ],
+  "top_human_studies": [
+    {
+      "study_key": "pmid:31917996",
+      "source": "pubmed",
+      "title": "NAD+ therapy in age-related degenerative disorders: A benefit/risk analysis.",
+      "year": 2020,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "31917996",
+        "doi": "10.1016/j.exger.2020.110831"
+      },
+      "citations": [
+        {
+          "pmid": "31917996",
+          "doi": "10.1016/j.exger.2020.110831",
+          "title": "NAD+ therapy in age-related degenerative disorders: A benefit/risk analysis."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Research Support, Non-U.S. Gov't",
+          "Systematic Review"
+        ],
+        "mesh_terms": [
+          "Aging",
+          "Animals",
+          "Humans",
+          "Inflammation",
+          "Mice",
+          "NAD",
+          "Neurodegenerative Diseases",
+          "Niacinamide",
+          "Nicotinamide Mononucleotide",
+          "Oxidative Stress",
+          "Pyridinium Compounds",
+          "Rats",
+          "Risk Assessment"
+        ],
+        "hallmark_tags": [
+          "genomic_instability",
+          "cellular_senescence",
+          "intercellular_communication"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:39185644",
+      "source": "pubmed",
+      "title": "Effects of Nicotinamide Mononucleotide Supplementation on Muscle and Liver Functions Among the Middle-aged and Elderly: A Systematic Review and Meta-analysis of Randomized Controlled Trials.",
+      "year": 2025,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "unknown",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "39185644",
+        "doi": "10.2174/0113892010306242240808094303"
+      },
+      "citations": [
+        {
+          "pmid": "39185644",
+          "doi": "10.2174/0113892010306242240808094303",
+          "title": "Effects of Nicotinamide Mononucleotide Supplementation on Muscle and Liver Functions Among the Middle-aged and Elderly: A Systematic Review and Meta-analysis of Randomized Controlled Trials."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Systematic Review",
+          "Meta-Analysis"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Randomized Controlled Trials as Topic",
+          "Nicotinamide Mononucleotide",
+          "Aged",
+          "Liver",
+          "Middle Aged",
+          "Dietary Supplements",
+          "Muscle, Skeletal",
+          "Aging"
+        ],
+        "hallmark_tags": [
+          "nutrient_sensing"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:37954044",
+      "source": "pubmed",
+      "title": "Exercise training upregulates intracellular nicotinamide phosphoribosyltransferase expression in humans: a systematic review with meta-analysis.",
+      "year": 2023,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "surrogate_biomarker",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [
+        "indirect_endpoint"
+      ],
+      "ids": {
+        "pmid": "37954044",
+        "doi": "10.3389/fpubh.2023.1287421"
+      },
+      "citations": [
+        {
+          "pmid": "37954044",
+          "doi": "10.3389/fpubh.2023.1287421",
+          "title": "Exercise training upregulates intracellular nicotinamide phosphoribosyltransferase expression in humans: a systematic review with meta-analysis."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Meta-Analysis",
+          "Systematic Review",
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Aging",
+          "Exercise",
+          "Muscle, Skeletal",
+          "NAD",
+          "Nicotinamide Phosphoribosyltransferase"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:35920994",
+      "source": "pubmed",
+      "title": "Impact of nutraceuticals and dietary supplements on mitochondria modifications in healthy aging: a systematic review of randomized controlled trials.",
+      "year": 2022,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "unknown",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "35920994",
+        "doi": "10.1007/s40520-022-02203-y"
+      },
+      "citations": [
+        {
+          "pmid": "35920994",
+          "doi": "10.1007/s40520-022-02203-y",
+          "title": "Impact of nutraceuticals and dietary supplements on mitochondria modifications in healthy aging: a systematic review of randomized controlled trials."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Systematic Review",
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Aged",
+          "Healthy Aging",
+          "Randomized Controlled Trials as Topic",
+          "Dietary Supplements",
+          "Fatty Acids, Omega-3",
+          "Mitochondria"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:40033213",
+      "source": "pubmed",
+      "title": "A systematic review of the therapeutic potential of nicotinamide adenine dinucleotide precursors for cognitive diseases in preclinical rodent models.",
+      "year": 2025,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "40033213",
+        "doi": "10.1186/s12868-025-00937-9"
+      },
+      "citations": [
+        {
+          "pmid": "40033213",
+          "doi": "10.1186/s12868-025-00937-9",
+          "title": "A systematic review of the therapeutic potential of nicotinamide adenine dinucleotide precursors for cognitive diseases in preclinical rodent models."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Systematic Review"
+        ],
+        "mesh_terms": [
+          "Animals",
+          "NAD",
+          "Disease Models, Animal",
+          "Cognitive Dysfunction",
+          "Humans",
+          "Oxidative Stress",
+          "Rats",
+          "Mitochondria"
+        ],
+        "hallmark_tags": [
+          "intercellular_communication"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:39116016",
+      "source": "pubmed",
+      "title": "Efficacy of oral nicotinamide mononucleotide supplementation on glucose and lipid metabolism for adults: a systematic review with meta-analysis on randomized controlled trials.",
+      "year": 2025,
+      "evidence_level": 1,
+      "study_type": "meta_analysis",
+      "population_class": "human",
+      "endpoint_class": "clinical_intermediate",
+      "effect_direction": "null",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "39116016",
+        "doi": "10.1080/10408398.2024.2387324"
+      },
+      "citations": [
+        {
+          "pmid": "39116016",
+          "doi": "10.1080/10408398.2024.2387324",
+          "title": "Efficacy of oral nicotinamide mononucleotide supplementation on glucose and lipid metabolism for adults: a systematic review with meta-analysis on randomized controlled trials."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Systematic Review",
+          "Meta-Analysis"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Dietary Supplements",
+          "Randomized Controlled Trials as Topic",
+          "Blood Glucose",
+          "Adult",
+          "Lipid Metabolism",
+          "Triglycerides",
+          "NAD",
+          "Administration, Oral"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:36482258",
+      "source": "pubmed",
+      "title": "The efficacy and safety of \u03b2-nicotinamide mononucleotide (NMN) supplementation in healthy middle-aged adults: a randomized, multicenter, double-blind, placebo-controlled, parallel-group, dose-dependent clinical trial.",
+      "year": 2023,
+      "evidence_level": 4,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "36482258",
+        "doi": "10.1007/s11357-022-00705-1"
+      },
+      "citations": [
+        {
+          "pmid": "36482258",
+          "doi": "10.1007/s11357-022-00705-1",
+          "title": "The efficacy and safety of \u03b2-nicotinamide mononucleotide (NMN) supplementation in healthy middle-aged adults: a randomized, multicenter, double-blind, placebo-controlled, parallel-group, dose-dependent clinical trial."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Randomized Controlled Trial",
+          "Multicenter Study",
+          "Journal Article",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Animals",
+          "Humans",
+          "Middle Aged",
+          "Nicotinamide Mononucleotide",
+          "NAD",
+          "Treatment Outcome",
+          "Double-Blind Method",
+          "Dietary Supplements"
+        ],
+        "hallmark_tags": [
+          "nutrient_sensing"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:33888596",
+      "source": "pubmed",
+      "title": "Nicotinamide mononucleotide increases muscle insulin sensitivity in prediabetic women.",
+      "year": 2021,
+      "evidence_level": 2,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "33888596",
+        "doi": "10.1126/science.abe9985"
+      },
+      "citations": [
+        {
+          "pmid": "33888596",
+          "doi": "10.1126/science.abe9985",
+          "title": "Nicotinamide mononucleotide increases muscle insulin sensitivity in prediabetic women."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Randomized Controlled Trial",
+          "Research Support, N.I.H., Extramural",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Aged",
+          "Body Composition",
+          "Dietary Supplements",
+          "Double-Blind Method",
+          "Female",
+          "Humans",
+          "Insulin",
+          "Insulin Resistance",
+          "Middle Aged",
+          "Mitochondria, Muscle",
+          "Muscle, Skeletal",
+          "NAD",
+          "Nicotinamide Mononucleotide",
+          "Obesity",
+          "Overweight",
+          "Postmenopause",
+          "Prediabetic State",
+          "RNA-Seq",
+          "Signal Transduction"
+        ],
+        "hallmark_tags": [
+          "nutrient_sensing"
+        ]
+      }
+    }
+  ],
+  "trial_registry_rows": [],
+  "preclinical_anchors": [
+    {
+      "study_key": "pmid:36482258",
+      "source": "pubmed",
+      "title": "The efficacy and safety of \u03b2-nicotinamide mononucleotide (NMN) supplementation in healthy middle-aged adults: a randomized, multicenter, double-blind, placebo-controlled, parallel-group, dose-dependent clinical trial.",
+      "year": 2023,
+      "evidence_level": 4,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "36482258",
+        "doi": "10.1007/s11357-022-00705-1"
+      },
+      "citations": [
+        {
+          "pmid": "36482258",
+          "doi": "10.1007/s11357-022-00705-1",
+          "title": "The efficacy and safety of \u03b2-nicotinamide mononucleotide (NMN) supplementation in healthy middle-aged adults: a randomized, multicenter, double-blind, placebo-controlled, parallel-group, dose-dependent clinical trial."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Randomized Controlled Trial",
+          "Multicenter Study",
+          "Journal Article",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Animals",
+          "Humans",
+          "Middle Aged",
+          "Nicotinamide Mononucleotide",
+          "NAD",
+          "Treatment Outcome",
+          "Double-Blind Method",
+          "Dietary Supplements"
+        ],
+        "hallmark_tags": [
+          "nutrient_sensing"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:31685720",
+      "source": "pubmed",
+      "title": "Effect of oral administration of nicotinamide mononucleotide on clinical parameters and nicotinamide metabolite levels in healthy Japanese men.",
+      "year": 2020,
+      "evidence_level": 5,
+      "study_type": "clinical_trial",
+      "population_class": "human",
+      "endpoint_class": "clinical_intermediate",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "31685720",
+        "doi": "10.1507/endocrj.EJ19-0313"
+      },
+      "citations": [
+        {
+          "pmid": "31685720",
+          "doi": "10.1507/endocrj.EJ19-0313",
+          "title": "Effect of oral administration of nicotinamide mononucleotide on clinical parameters and nicotinamide metabolite levels in healthy Japanese men."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Clinical Trial",
+          "Journal Article"
+        ],
+        "mesh_terms": [
+          "Administration, Oral",
+          "Adult",
+          "Bilirubin",
+          "Blood Glucose",
+          "Blood Pressure",
+          "Body Temperature",
+          "Chlorides",
+          "Chromatography, Liquid",
+          "Creatinine",
+          "Diagnostic Techniques, Ophthalmological",
+          "Dose-Response Relationship, Drug",
+          "Electrocardiography",
+          "Healthy Volunteers",
+          "Heart Rate",
+          "Humans",
+          "Intraocular Pressure",
+          "Japan",
+          "Male",
+          "Middle Aged",
+          "Niacinamide",
+          "Nicotinamide Mononucleotide",
+          "Oxygen",
+          "Pyridones",
+          "Sleep",
+          "Tandem Mass Spectrometry",
+          "Visual Acuity"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:36797393",
+      "source": "pubmed",
+      "title": "Nicotinamide adenine dinucleotide metabolism and arterial stiffness after long-term nicotinamide mononucleotide supplementation: a randomized, double-blind, placebo-controlled trial.",
+      "year": 2023,
+      "evidence_level": 4,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "null",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "36797393",
+        "doi": "10.1038/s41598-023-29787-3"
+      },
+      "citations": [
+        {
+          "pmid": "36797393",
+          "doi": "10.1038/s41598-023-29787-3",
+          "title": "Nicotinamide adenine dinucleotide metabolism and arterial stiffness after long-term nicotinamide mononucleotide supplementation: a randomized, double-blind, placebo-controlled trial."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Randomized Controlled Trial",
+          "Journal Article",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Adult",
+          "Animals",
+          "Humans",
+          "Middle Aged",
+          "Dietary Supplements",
+          "NAD",
+          "Nicotinamide Mononucleotide",
+          "Pulse Wave Analysis",
+          "Vascular Stiffness",
+          "Double-Blind Method"
+        ],
+        "hallmark_tags": []
+      }
+    },
+    {
+      "study_key": "pmid:39548320",
+      "source": "pubmed",
+      "title": "Effect of nicotinamide riboside on airway inflammation in COPD: a randomized, placebo-controlled trial.",
+      "year": 2024,
+      "evidence_level": 5,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_hard",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "39548320",
+        "doi": "10.1038/s43587-024-00758-1"
+      },
+      "citations": [
+        {
+          "pmid": "39548320",
+          "doi": "10.1038/s43587-024-00758-1",
+          "title": "Effect of nicotinamide riboside on airway inflammation in COPD: a randomized, placebo-controlled trial."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Journal Article",
+          "Randomized Controlled Trial"
+        ],
+        "mesh_terms": [
+          "Humans",
+          "Pyridinium Compounds",
+          "Niacinamide",
+          "Pulmonary Disease, Chronic Obstructive",
+          "Male",
+          "Female",
+          "Aged",
+          "Double-Blind Method",
+          "Middle Aged",
+          "Interleukin-8",
+          "Inflammation",
+          "Sputum",
+          "Interleukin-6",
+          "NAD",
+          "Treatment Outcome"
+        ],
+        "hallmark_tags": [
+          "genomic_instability",
+          "epigenetic_alterations",
+          "cellular_senescence",
+          "intercellular_communication"
+        ]
+      }
+    },
+    {
+      "study_key": "pmid:36515353",
+      "source": "pubmed",
+      "title": "Oral nicotinamide riboside raises NAD+ and lowers biomarkers of neurodegenerative pathology in plasma extracellular vesicles enriched for neuronal origin.",
+      "year": 2023,
+      "evidence_level": 5,
+      "study_type": "rct",
+      "population_class": "human",
+      "endpoint_class": "clinical_intermediate",
+      "effect_direction": "benefit",
+      "quality_flags": [
+        "preclinical_translation_risk"
+      ],
+      "directness_flags": [],
+      "ids": {
+        "pmid": "36515353",
+        "doi": "10.1111/acel.13754"
+      },
+      "citations": [
+        {
+          "pmid": "36515353",
+          "doi": "10.1111/acel.13754",
+          "title": "Oral nicotinamide riboside raises NAD+ and lowers biomarkers of neurodegenerative pathology in plasma extracellular vesicles enriched for neuronal origin."
+        }
+      ],
+      "metadata": {
+        "pub_types": [
+          "Randomized Controlled Trial",
+          "Journal Article",
+          "Research Support, N.I.H., Extramural",
+          "Research Support, Non-U.S. Gov't"
+        ],
+        "mesh_terms": [
+          "Aged",
+          "Humans",
+          "Biomarkers",
+          "Extracellular Vesicles",
+          "Insulin",
+          "NAD",
+          "Neurodegenerative Diseases",
+          "Niacinamide",
+          "Pyridinium Compounds"
+        ],
+        "hallmark_tags": [
+          "nutrient_sensing"
+        ]
+      }
+    }
+  ],
+  "key_flags": [
+    "indirect_endpoint",
+    "preclinical_translation_risk"
+  ],
+  "optional_source_status": []
+}

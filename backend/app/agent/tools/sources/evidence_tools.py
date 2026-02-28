@@ -58,19 +58,63 @@ def _to_study_record(item: dict[str, Any]) -> StudyRecord:
 
 
 def _ledger_from_payload(payload: dict[str, Any]) -> EvidenceLedger:
-    if "ledger" in payload and isinstance(payload.get("ledger"), dict):
-        payload = payload.get("ledger")
+    if isinstance(payload, list):
+        payload = {"records": payload}
+    if "ledger" in payload:
+        ledger_payload = payload.get("ledger")
+        if isinstance(ledger_payload, dict):
+            payload = ledger_payload
+        elif isinstance(ledger_payload, list):
+            payload = {"records": ledger_payload}
     if not isinstance(payload, dict):
         raise ToolExecutionError(code="VALIDATION_ERROR", message="'ledger' must be an object")
 
-    records = [_to_study_record(item) for item in (payload.get("records") or []) if isinstance(item, dict)]
+    raw_records = payload.get("records")
+    if not isinstance(raw_records, list):
+        for alias in ("classified_records", "studies", "items"):
+            candidate = payload.get(alias)
+            if isinstance(candidate, list):
+                raw_records = candidate
+                break
+    if not isinstance(raw_records, list):
+        raw_records = []
+
+    records = [_to_study_record(item) for item in raw_records if isinstance(item, dict)]
+
+    counts_by_level = payload.get("counts_by_level") if isinstance(payload.get("counts_by_level"), dict) else {}
+    counts_by_endpoint = payload.get("counts_by_endpoint") if isinstance(payload.get("counts_by_endpoint"), dict) else {}
+    counts_by_source = payload.get("counts_by_source") if isinstance(payload.get("counts_by_source"), dict) else {}
+    if not counts_by_level and records:
+        for record in records:
+            level_key = str(record.evidence_level) if record.evidence_level is not None else "unknown"
+            counts_by_level[level_key] = int(counts_by_level.get(level_key, 0)) + 1
+    if not counts_by_endpoint and records:
+        for record in records:
+            endpoint = str(record.endpoint_class or "unknown")
+            counts_by_endpoint[endpoint] = int(counts_by_endpoint.get(endpoint, 0)) + 1
+    if not counts_by_source and records:
+        for record in records:
+            source = str(record.source or "unknown")
+            counts_by_source[source] = int(counts_by_source.get(source, 0)) + 1
+
+    coverage_gaps = payload.get("coverage_gaps")
+    if not isinstance(coverage_gaps, list):
+        coverage_gaps = []
+    if not coverage_gaps:
+        if counts_by_level.get("1", 0) == 0:
+            coverage_gaps.append("No Level 1 evidence detected.")
+        if counts_by_level.get("2", 0) == 0:
+            coverage_gaps.append("No Level 2 evidence detected.")
+        if sum(int(counts_by_level.get(level, 0)) for level in ("1", "2", "3")) == 0:
+            coverage_gaps.append("No human evidence detected (Levels 1-3).")
+
     return EvidenceLedger(
         records=records,
         dedupe_stats=payload.get("dedupe_stats") if isinstance(payload.get("dedupe_stats"), dict) else {},
-        counts_by_level=payload.get("counts_by_level") if isinstance(payload.get("counts_by_level"), dict) else {},
-        counts_by_endpoint=payload.get("counts_by_endpoint") if isinstance(payload.get("counts_by_endpoint"), dict) else {},
-        counts_by_source=payload.get("counts_by_source") if isinstance(payload.get("counts_by_source"), dict) else {},
-        coverage_gaps=list(payload.get("coverage_gaps") or []),
+        counts_by_level=counts_by_level,
+        counts_by_endpoint=counts_by_endpoint,
+        counts_by_source=counts_by_source,
+        coverage_gaps=[str(item) for item in coverage_gaps if str(item).strip()],
         optional_source_status=list(payload.get("optional_source_status") or []),
     )
 
@@ -103,7 +147,7 @@ def build_evidence_tools() -> list[ToolSpec]:
         return make_tool_output(
             source="evidence",
             summary=f"Classified {len(classified)} PubMed record(s) into evidence tiers.",
-            data={"records": classified},
+            data={"records": classified, "classified_records": classified},
             ids=[row.get("study_key") for row in classified if row.get("study_key")],
             warnings=warnings,
             artifacts=artifacts,
@@ -112,7 +156,7 @@ def build_evidence_tools() -> list[ToolSpec]:
         )
 
     def evidence_classify_trial_records(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
-        records = payload.get("records") or payload.get("studies")
+        records = payload.get("records") if "records" in payload else payload.get("studies")
         if not isinstance(records, list):
             raise ToolExecutionError(code="VALIDATION_ERROR", message="'records' (or 'studies') must be a list of trial records")
 
@@ -130,7 +174,7 @@ def build_evidence_tools() -> list[ToolSpec]:
         return make_tool_output(
             source="evidence",
             summary=f"Classified {len(classified)} ClinicalTrials record(s).",
-            data={"records": classified},
+            data={"records": classified, "classified_records": classified},
             ids=[row.get("study_key") for row in classified if row.get("study_key")],
             warnings=warnings,
             artifacts=artifacts,
@@ -139,8 +183,25 @@ def build_evidence_tools() -> list[ToolSpec]:
         )
 
     def evidence_build_ledger(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
-        pubmed_records = payload.get("pubmed_records") or payload.get("records") or []
-        trial_records = payload.get("trial_records") or payload.get("trials") or []
+        pubmed_records = payload.get("pubmed_records")
+        if not isinstance(pubmed_records, list):
+            for alias in ("records", "classified_records"):
+                candidate = payload.get(alias)
+                if isinstance(candidate, list):
+                    pubmed_records = candidate
+                    break
+        if not isinstance(pubmed_records, list):
+            pubmed_records = []
+
+        trial_records = payload.get("trial_records")
+        if not isinstance(trial_records, list):
+            for alias in ("trials", "studies"):
+                candidate = payload.get(alias)
+                if isinstance(candidate, list):
+                    trial_records = candidate
+                    break
+        if not isinstance(trial_records, list):
+            trial_records = []
         optional_source_status = payload.get("optional_source_status") or []
 
         all_rows: list[dict[str, Any]] = []
@@ -196,10 +257,11 @@ def build_evidence_tools() -> list[ToolSpec]:
 
         ledger_dict = ledger.to_dict()
         artifacts = _maybe_write_artifact(ctx, "evidence_ledger", ledger_dict)
+        output_data = {**ledger_dict, "ledger": ledger_dict}
         return make_tool_output(
             source="evidence",
             summary=f"Built evidence ledger with {len(deduped)} unique record(s).",
-            data=ledger_dict,
+            data=output_data,
             ids=[record.study_key for record in deduped[:200]],
             artifacts=artifacts,
             data_schema_version="v2.1",
@@ -213,7 +275,7 @@ def build_evidence_tools() -> list[ToolSpec]:
         return make_tool_output(
             source="evidence",
             summary=f"Graded evidence ledger: {grade.score} ({grade.label}).",
-            data=out,
+            data={**out, "grade": out},
             ids=[str(grade.score)],
             data_schema_version="v2.1",
             ctx=ctx,
@@ -234,7 +296,7 @@ def build_evidence_tools() -> list[ToolSpec]:
         return make_tool_output(
             source="evidence",
             summary="Computed evidence gap map.",
-            data=gap_map,
+            data={**gap_map, "gap_map": gap_map},
             ids=[str(item) for item in gap_map.get("missing_levels") or []],
             data_schema_version="v2.1",
             ctx=ctx,

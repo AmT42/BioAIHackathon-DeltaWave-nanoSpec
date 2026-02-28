@@ -20,6 +20,9 @@ def test_master_prompt_contains_required_policy_sections() -> None:
         "`bash_exec` is a top-level tool call",
         "`llm_query`",
         "`llm_query_batch`",
+        "## Step 4 — Deterministic evidence pipeline (mandatory before final answer)",
+        "`evidence_render_report`",
+        "Final-answer rule:",
     ]
     for frag in required_fragments:
         assert frag in text

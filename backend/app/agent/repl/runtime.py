@@ -470,6 +470,25 @@ class ReplBindings:
     def _coerce_single_positional(self, tool_name: str, arg: Any) -> dict[str, Any]:
         if tool_name == "normalize_merge_candidates":
             return self._coerce_merge_candidates_positional(arg)
+        if tool_name in {"evidence_classify_pubmed_records", "evidence_classify_trial_records"}:
+            if isinstance(arg, ToolResultHandle):
+                return {"records": arg.records or arg.items or arg.studies}
+            if isinstance(arg, list):
+                return {"records": _coerce_for_payload(arg, key="records")}
+        if tool_name == "evidence_build_ledger":
+            if isinstance(arg, ToolResultHandle):
+                return {"pubmed_records": arg.records or arg.items or arg.studies}
+            if isinstance(arg, list):
+                return {"pubmed_records": _coerce_for_payload(arg, key="pubmed_records")}
+        if tool_name in {"evidence_grade", "evidence_gap_map", "evidence_render_report"}:
+            if isinstance(arg, ToolResultHandle):
+                data = arg.data
+                if isinstance(data, dict):
+                    return {"ledger": data}
+                if isinstance(data, list):
+                    return {"ledger": {"records": data}}
+            if isinstance(arg, list):
+                return {"ledger": {"records": _coerce_for_payload(arg, key="records")}}
         if tool_name == "retrieval_build_query_terms" and isinstance(arg, ToolResultHandle):
             concept_payload = arg.data
             if isinstance(concept_payload, dict) and isinstance(concept_payload.get("concept"), dict):
@@ -680,6 +699,39 @@ class ReplBindings:
                         normalized["query"] = value.strip()
                         break
 
+        if tool_name in {"evidence_classify_pubmed_records", "evidence_classify_trial_records"}:
+            if "records" not in normalized:
+                for alias in ("studies", "items", "classified_records"):
+                    candidate = normalized.get(alias)
+                    if isinstance(candidate, list):
+                        normalized["records"] = candidate
+                        break
+
+        if tool_name == "evidence_build_ledger":
+            if "pubmed_records" not in normalized:
+                for alias in ("records", "classified_records"):
+                    candidate = normalized.get(alias)
+                    if isinstance(candidate, list):
+                        normalized["pubmed_records"] = candidate
+                        break
+            if "trial_records" not in normalized:
+                for alias in ("trials", "studies"):
+                    candidate = normalized.get(alias)
+                    if isinstance(candidate, list):
+                        normalized["trial_records"] = candidate
+                        break
+
+        if tool_name in {"evidence_grade", "evidence_gap_map", "evidence_render_report"}:
+            ledger_payload = normalized.get("ledger")
+            if isinstance(ledger_payload, list):
+                normalized["ledger"] = {"records": ledger_payload}
+            if "ledger" not in normalized:
+                for alias in ("records", "classified_records", "studies", "items"):
+                    candidate = normalized.get(alias)
+                    if isinstance(candidate, list):
+                        normalized["ledger"] = {"records": candidate}
+                        break
+
         return normalized
 
     def _tool_error_hint(self, tool_name: str, error_message: str) -> str | None:
@@ -695,6 +747,7 @@ class ReplBindings:
             return (
                 "Hint: pass terms/intervention terms explicitly, e.g. "
                 "`tpl = retrieval_build_pubmed_templates(terms=terms.data.get('terms'))` "
+                "or `tpl = retrieval_build_pubmed_templates(intervention_terms=['metformin'])`; "
                 "then read `tpl.data['queries']`."
             )
         if tool_name == "clinicaltrials_search" and "provide at least one of" in lowered:
@@ -1096,7 +1149,7 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
             ],
             "subagents": [
                 "ids = pubmed_search(query='metformin aging', limit=20).ids",
-                "summary = llm_query('Use env ids to inspect strongest RCT signal with citations.', env={'ids': ids}, allowed_tools=['pubmed_fetch', 'evidence_classify_studies'])",
+                "summary = llm_query('Use env ids to inspect strongest RCT signal with citations.', env={'ids': ids}, allowed_tools=['pubmed_fetch', 'evidence_classify_pubmed_records'])",
                 "print(summary)",
                 "tasks = [",
                 "  {'task': 'Find strongest human evidence for metformin in aging', 'allowed_tools': ['pubmed_search', 'pubmed_fetch']},",
@@ -1178,6 +1231,10 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
             "Fetch tools usually take ids (aliases pmids/nct_ids are accepted).\n"
             "longevity_itp_fetch_summary is strict: ids must be a non-empty list of ITP summary URLs.\n"
             "Handles expose ids.head(n), shape(), records/items/studies convenience accessors.\n"
+            "When chaining uncertain tools, run in small steps: one call -> print(preview/shape) -> next call.\n"
+            "Use handle-safe counts (len(res.ids) or res.shape()); avoid ad-hoc attrs like ids_count.\n"
+            "For retrieval_build_pubmed_templates use either terms=terms.data.get('terms') "
+            "(dict) or intervention_terms=[...] (plain strings).\n"
         )
         if bindings.enable_subagent_helpers:
             text += (
@@ -1761,7 +1818,8 @@ class ReplRuntime:
                     "REPL executed successfully but produced no visible output. "
                     "Your code includes print(...), but those print statements may not have run "
                     "(for example, empty loops or filters). "
-                    "Try printing counts first, e.g. print(result.shape()) or print(len(result.records))."
+                    "Try printing counts first, e.g. print(result.shape()) or print(len(result.records)). "
+                    "If you iterated over result.records/items/studies, also print result.preview() and result.warnings."
                 )
             else:
                 raw_stdout = (
