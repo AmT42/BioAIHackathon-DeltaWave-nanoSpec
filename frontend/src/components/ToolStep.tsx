@@ -7,6 +7,11 @@ type ToolStepProps = {
   step: WorkStep;
 };
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
 function StatusBadge({ status }: { status: WorkStep["status"] }) {
   const labels: Record<string, string> = {
     streaming: "running",
@@ -64,6 +69,20 @@ function extractSummary(parsed: Record<string, unknown>): string | null {
   return null;
 }
 
+function extractKgGraphUpdateHint(step: WorkStep): string | null {
+  if (step.toolName !== "kg_query" && step.toolName !== "kg_cypher_execute") return null;
+  const result = asRecord(step.toolResult);
+  if (!result) return null;
+  const output = asRecord(result.output);
+  const data = asRecord(output?.data);
+  const subgraph = asRecord(data?.subgraph);
+  const summary = asRecord(subgraph?.summary);
+  const nodeCount = summary?.node_count;
+  const edgeCount = summary?.edge_count;
+  if (typeof nodeCount !== "number" || typeof edgeCount !== "number") return null;
+  return `KG graph updated: ${nodeCount} node${nodeCount === 1 ? "" : "s"}, ${edgeCount} edge${edgeCount === 1 ? "" : "s"}`;
+}
+
 export function ToolStep({ step }: ToolStepProps) {
   const [showResult, setShowResult] = useState(false);
   const isStreaming = step.status === "streaming";
@@ -71,6 +90,7 @@ export function ToolStep({ step }: ToolStepProps) {
   const { parsed, display } = result ? tryParseJson(result) : { parsed: null, display: "" };
   const summary = parsed ? extractSummary(parsed) : null;
   const toolName = step.toolName || "tool";
+  const kgGraphHint = extractKgGraphUpdateHint(step);
 
   return (
     <div className={`tool-step ${isStreaming ? "tool-step--streaming" : ""}`}>
@@ -83,6 +103,11 @@ export function ToolStep({ step }: ToolStepProps) {
       </div>
 
       {label && <div className="tool-step__label">{label}</div>}
+      {kgGraphHint && (
+        <div className="tool-step__label tool-step__label--kg">
+          {kgGraphHint}
+        </div>
+      )}
 
       {isStreaming && !result && <div className="tool-step__shimmer" />}
 

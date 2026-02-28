@@ -671,6 +671,45 @@ def _extract_subgraph_from_records(records: list[dict[str, Any]]) -> tuple[dict[
     return nodes_by_key, edges
 
 
+def _build_canonical_subgraph(records: list[dict[str, Any]]) -> dict[str, Any]:
+    nodes_by_key, edges = _extract_subgraph_from_records(records)
+    nodes = [
+        {
+            "key": node["key"],
+            "id": node["id"],
+            "name": node["name"],
+            "node_type": node["node_type"],
+            "labels": node["labels"],
+        }
+        for node in sorted(nodes_by_key.values(), key=lambda row: str(row.get("key", "")))
+    ]
+    canonical_edges = sorted(
+        [
+            {
+                "source": edge["source"],
+                "target": edge["target"],
+                "type": edge["type"],
+                "weight": round(float(edge["weight"]), 6),
+                "confidence_key": edge["confidence_key"],
+            }
+            for edge in edges
+        ],
+        key=lambda row: (
+            str(row.get("source", "")),
+            str(row.get("type", "")),
+            str(row.get("target", "")),
+        ),
+    )
+    return {
+        "summary": {
+            "node_count": len(nodes),
+            "edge_count": len(canonical_edges),
+        },
+        "nodes": nodes,
+        "edges": canonical_edges,
+    }
+
+
 def _compute_weighted_pagerank(
     node_keys: list[str],
     *,
@@ -939,6 +978,7 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
             ) from exc
 
         data: dict[str, Any] = {"cypher": cypher, "records": rows}
+        data["subgraph"] = _build_canonical_subgraph(rows)
         if include_node_stats:
             data["node_stats"] = _build_query_local_node_stats(rows, top_n_per_type=top_n_per_type)
 
@@ -980,6 +1020,7 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
             ) from exc
 
         data: dict[str, Any] = {"cypher": cypher, "records": rows}
+        data["subgraph"] = _build_canonical_subgraph(rows)
         if include_node_stats:
             data["node_stats"] = _build_query_local_node_stats(rows, top_n_per_type=top_n_per_type)
 

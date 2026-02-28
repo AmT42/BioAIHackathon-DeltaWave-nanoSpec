@@ -39,7 +39,10 @@ class FakeHttp:
                             "pubdate": "2022",
                             "source": "JAMA",
                             "pubtype": ["Randomized Controlled Trial"],
-                            "articleids": [{"idtype": "doi", "value": "10.1/x"}],
+                            "articleids": [
+                                {"idtype": "doi", "value": "10.1/x"},
+                                {"idtype": "pmc", "value": "PMC9999999"},
+                            ],
                         },
                     }
                 },
@@ -75,6 +78,19 @@ class FakeHttp:
         raise AssertionError(f"Unhandled url: {url}")
 
     def get_text(self, *, url, params=None, headers=None):
+        if "pmc/utils/oa/oa.fcgi" in url:
+            return (
+                """
+                <OA>
+                  <records>
+                    <record id="PMC9999999">
+                      <link format="pdf" href="https://example.org/pmc9999999.pdf" />
+                    </record>
+                  </records>
+                </OA>
+                """,
+                {},
+            )
         if "efetch.fcgi" in url:
             return (
                 """
@@ -91,6 +107,11 @@ class FakeHttp:
             )
         raise AssertionError(f"Unhandled text url: {url}")
 
+    def get_bytes(self, *, url, params=None, headers=None):
+        if "pmc9999999.pdf" in url:
+            return (b"%PDF-1.4\nfake-pdf", {})
+        raise AssertionError(f"Unhandled bytes url: {url}")
+
 
 def _tool(specs, name: str):
     return next(spec for spec in specs if spec.name == name)
@@ -104,9 +125,18 @@ def test_literature_wrappers_pubmed_and_openalex() -> None:
     out = _tool(tools, "pubmed_search").handler({"query": "rapamycin aging", "mode": "precision", "limit": 5}, ctx)
     assert out["ids"] == ["12345", "67890"]
 
-    fetch = _tool(tools, "pubmed_fetch").handler({"ids": ["12345"], "mode": "balanced", "include_abstract": True}, ctx)
+    fetch = _tool(tools, "pubmed_fetch").handler(
+        {"ids": ["12345"], "mode": "balanced", "include_abstract": False, "include_full_text": True},
+        ctx,
+    )
     assert fetch["data"]["records"][0]["is_rct_like"] is True
     assert fetch["data"]["records"][0]["abstract"] == "Abstract A"
+    assert fetch["data"]["records"][0]["pdf_url"] == "https://example.org/pmc9999999.pdf"
+    assert fetch["data"]["records"][0]["pdf_downloaded"] is True
+    assert fetch["data"]["records"][0]["pdf_artifact_path"] is None
+    assert fetch["data"]["include_abstract"] is True
+    assert fetch["data"]["download_pdf"] is True
+    assert "include_abstract=false ignored" in " ".join(fetch["warnings"])
 
     oa = _tool(tools, "openalex_search").handler({"query": "rapamycin", "mode": "balanced"}, ctx)
     assert oa["ids"] == ["https://openalex.org/W1"]

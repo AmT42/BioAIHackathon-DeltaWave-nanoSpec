@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 from urllib import parse
+import re
 import xml.etree.ElementTree as ET
 
 from app.config import Settings
-from app.agent.tools.artifacts import write_raw_json_artifact
+from app.agent.tools.artifacts import write_binary_file_artifact, write_raw_json_artifact
 from app.agent.tools.context import ToolContext
 from app.agent.tools.contracts import make_tool_output
 from app.agent.tools.descriptions import render_tool_description
@@ -146,6 +147,55 @@ def _extract_abstracts_from_efetch_xml(xml_text: str) -> dict[str, str]:
     return out
 
 
+def _local_name(tag: Any) -> str:
+    if not isinstance(tag, str):
+        return ""
+    return tag.split("}", 1)[-1] if "}" in tag else tag
+
+
+def _extract_pmcid_from_article_ids(article_ids: list[Any]) -> str | None:
+    for aid in article_ids:
+        if not isinstance(aid, dict):
+            continue
+        idtype = str(aid.get("idtype") or "").strip().lower()
+        value = str(aid.get("value") or "").strip()
+        if not value:
+            continue
+        if idtype == "pmc":
+            upper = value.upper()
+            return upper if upper.startswith("PMC") else f"PMC{value}"
+        if idtype == "pmcid":
+            match = re.search(r"(PMC\d+)", value, flags=re.IGNORECASE)
+            if match:
+                return match.group(1).upper()
+    return None
+
+
+def _extract_pdf_url_from_pmc_oa_xml(xml_text: str) -> str | None:
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return None
+
+    for node in root.iter():
+        if _local_name(node.tag) != "link":
+            continue
+        attrs = node.attrib if isinstance(node.attrib, dict) else {}
+        fmt = str(attrs.get("format") or "").strip().lower()
+        href = str(attrs.get("href") or attrs.get("{http://www.w3.org/1999/xlink}href") or "").strip()
+        if not href:
+            continue
+        if fmt == "pdf" or href.lower().endswith(".pdf"):
+            return href
+    return None
+
+
+def _normalize_pdf_download_url(url: str) -> str:
+    if url.lower().startswith("ftp://"):
+        return "https://" + url[6:]
+    return url
+
+
 def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSpec]:
     def pubmed_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
         query = _require_query(payload)
@@ -207,11 +257,26 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
     def pubmed_fetch(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
         ids = _require_ids(payload, max_size=200)
         mode = _require_mode(payload)
-        include_abstract = bool(payload.get("include_abstract", False))
+        include_full_text = bool(payload.get("include_full_text", True))
+        download_pdf = bool(payload.get("download_pdf", True))
+        pdf_max_bytes_raw = payload.get("pdf_max_bytes", 15_000_000)
+        try:
+            pdf_max_bytes = int(pdf_max_bytes_raw)
+        except Exception as exc:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'pdf_max_bytes' must be an integer") from exc
+        if pdf_max_bytes < 100_000 or pdf_max_bytes > 100_000_000:
+            raise ToolExecutionError(
+                code="VALIDATION_ERROR",
+                message="'pdf_max_bytes' must be between 100000 and 100000000",
+                details={"pdf_max_bytes": pdf_max_bytes},
+            )
         fields = payload.get("fields") or []
         if fields is not None and not isinstance(fields, list):
             raise ToolExecutionError(code="VALIDATION_ERROR", message="'fields' must be a list of field names")
         selected_fields = {str(item).strip() for item in fields if str(item).strip()}
+        warnings: list[str] = []
+        if payload.get("include_abstract") is False:
+            warnings.append("include_abstract=false ignored; abstracts are always included for pubmed_fetch.")
 
         params = _pubmed_api_params(
             settings,
@@ -225,22 +290,69 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
         )
 
         abstracts_by_pmid: dict[str, str] = {}
+        pdf_url_by_pmid: dict[str, str] = {}
+        pdf_downloaded_pmids: set[str] = set()
+        pdf_artifact_by_pmid: dict[str, dict[str, Any]] = {}
         artifacts: list[dict[str, Any]] = []
-        if include_abstract:
-            fetch_params = _pubmed_api_params(
-                settings,
-                db="pubmed",
-                id=",".join(ids),
-                retmode="xml",
-            )
-            xml_text, _ = http.get_text(url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi", params=fetch_params)
-            abstracts_by_pmid = _extract_abstracts_from_efetch_xml(xml_text)
-            xml_ref = write_raw_json_artifact(ctx, "pubmed_fetch_xml_metadata", {"xml_size": len(xml_text)}) if ctx else None
-            if xml_ref:
-                artifacts.append(xml_ref)
+        fetch_params = _pubmed_api_params(
+            settings,
+            db="pubmed",
+            id=",".join(ids),
+            retmode="xml",
+        )
+        xml_text, _ = http.get_text(url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi", params=fetch_params)
+        abstracts_by_pmid = _extract_abstracts_from_efetch_xml(xml_text)
+        xml_ref = write_raw_json_artifact(ctx, "pubmed_fetch_xml_metadata", {"xml_size": len(xml_text)}) if ctx else None
+        if xml_ref:
+            artifacts.append(xml_ref)
 
         result = (summary_data or {}).get("result") or {}
         uids = [str(item) for item in (result.get("uids") or []) if str(item).strip()]
+
+        pmcid_by_pmid: dict[str, str] = {}
+        if include_full_text:
+            for uid in uids:
+                item = result.get(uid) or {}
+                article_ids = list(item.get("articleids") or [])
+                pmcid = _extract_pmcid_from_article_ids(article_ids)
+                if pmcid:
+                    pmcid_by_pmid[uid] = pmcid
+
+            for pmid, pmcid in pmcid_by_pmid.items():
+                try:
+                    oa_xml, _ = http.get_text(
+                        url="https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi",
+                        params={"id": pmcid},
+                    )
+                    pdf_url = _extract_pdf_url_from_pmc_oa_xml(oa_xml)
+                    if not pdf_url:
+                        warnings.append(f"No OA PDF link for PMID {pmid} (PMCID {pmcid}).")
+                        continue
+                    pdf_url_by_pmid[pmid] = pdf_url
+
+                    if download_pdf:
+                        pdf_download_url = _normalize_pdf_download_url(pdf_url)
+                        pdf_bytes, _ = http.get_bytes(url=pdf_download_url)
+                        if len(pdf_bytes) > pdf_max_bytes:
+                            warnings.append(
+                                f"PDF too large for PMID {pmid}: {len(pdf_bytes)} bytes exceeds pdf_max_bytes={pdf_max_bytes}."
+                            )
+                            continue
+                        if not pdf_bytes.startswith(b"%PDF"):
+                            warnings.append(f"Downloaded file is not a PDF for PMID {pmid}.")
+                            continue
+                        pdf_downloaded_pmids.add(pmid)
+                        pdf_ref = write_binary_file_artifact(ctx, f"pubmed_{pmid}.pdf", pdf_bytes) if ctx else None
+                        if pdf_ref:
+                            artifacts.append(pdf_ref)
+                            pdf_artifact_by_pmid[pmid] = pdf_ref
+                except ToolExecutionError:
+                    warnings.append(f"PDF unavailable for PMID {pmid} (PMCID {pmcid}).")
+
+            if include_full_text and pmcid_by_pmid and not pdf_url_by_pmid:
+                warnings.append("No OA PDF links found for PMCID-linked records.")
+            if include_full_text and not pmcid_by_pmid:
+                warnings.append("No PMCID found in PubMed records; PDF retrieval skipped.")
 
         records: list[dict[str, Any]] = []
         for uid in uids:
@@ -248,6 +360,7 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
             pub_types = list(item.get("pubtype") or [])
             article_ids = list(item.get("articleids") or [])
             doi = None
+            pmcid = _extract_pmcid_from_article_ids(article_ids)
             for aid in article_ids:
                 if isinstance(aid, dict) and str(aid.get("idtype") or "").lower() == "doi":
                     doi = aid.get("value")
@@ -261,17 +374,25 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
                 "pub_types": pub_types,
                 "article_ids": article_ids,
                 "doi": doi,
+                "pmcid": pmcid,
                 "is_meta_or_systematic": any("meta" in str(pt).lower() or "systematic" in str(pt).lower() for pt in pub_types),
                 "is_rct_like": any("randomized" in str(pt).lower() or "clinical trial" in str(pt).lower() for pt in pub_types),
             }
-            if include_abstract:
-                record["abstract"] = abstracts_by_pmid.get(uid)
+            record["abstract"] = abstracts_by_pmid.get(uid)
+            if include_full_text:
+                pdf_ref = pdf_artifact_by_pmid.get(uid)
+                record["pdf_url"] = pdf_url_by_pmid.get(uid)
+                record["pdf_downloaded"] = uid in pdf_downloaded_pmids
+                record["pdf_artifact_path"] = pdf_ref.get("path") if isinstance(pdf_ref, dict) else None
             records.append(record)
 
         if selected_fields:
             filtered_records: list[dict[str, Any]] = []
+            mandatory_fields = {"pmid", "abstract"}
+            if include_full_text:
+                mandatory_fields.update({"pdf_url", "pdf_downloaded", "pdf_artifact_path"})
             for record in records:
-                filtered = {k: v for k, v in record.items() if k in selected_fields or k == "pmid"}
+                filtered = {k: v for k, v in record.items() if k in selected_fields or k in mandatory_fields}
                 filtered_records.append(filtered)
             records = filtered_records
 
@@ -283,9 +404,17 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
             source="pubmed",
             summary=f"Fetched {len(records)} PubMed record(s).",
             result_kind="record_list",
-            data={"mode": mode, "records": records},
+            data={
+                "mode": mode,
+                "include_abstract": True,
+                "include_full_text": include_full_text,
+                "download_pdf": download_pdf if include_full_text else None,
+                "pdf_max_bytes": pdf_max_bytes if include_full_text else None,
+                "records": records,
+            },
             ids=[record.get("pmid") for record in records if record.get("pmid")],
             citations=[{"pmid": rec.get("pmid"), "doi": rec.get("doi"), "title": rec.get("title"), "year": rec.get("pubdate")} for rec in records],
+            warnings=warnings,
             artifacts=artifacts,
             request_id=_request_id(headers),
             ctx=ctx,
@@ -429,10 +558,10 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
             name="pubmed_fetch",
             description=render_tool_description(
                 purpose="Fetch PubMed metadata records by PMID list.",
-                when=["you already have PMID IDs", "you need publication type and evidence-level metadata"],
+                when=["you already have PMID IDs", "you need publication type and evidence-level metadata", "you want PubMed abstracts with optional PMC OA PDFs"],
                 avoid=["you only have free-text query", "you exceed PMID batch limits"],
-                critical_args=["ids: PMID list", "mode: kept for policy consistency", "include_abstract/fields: payload size tuning"],
-                returns="Record list keyed by PMID with publication metadata and optional abstracts.",
+                critical_args=["ids: PMID list", "mode: kept for policy consistency", "include_full_text/download_pdf/pdf_max_bytes/fields: payload size tuning"],
+                returns="Record list keyed by PMID with publication metadata and always-included abstracts, plus optional PMCID-linked PDF metadata/artifacts.",
                 fails_if=["ids missing", "ids exceed max batch", "PubMed upstream unavailable"],
             ),
             input_schema={
@@ -440,7 +569,10 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
                 "properties": {
                     "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 200},
                     "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
-                    "include_abstract": {"type": "boolean", "default": False},
+                    "include_abstract": {"type": "boolean", "default": True},
+                    "include_full_text": {"type": "boolean", "default": True},
+                    "download_pdf": {"type": "boolean", "default": True},
+                    "pdf_max_bytes": {"type": "integer", "minimum": 100000, "maximum": 100000000, "default": 15000000},
                     "fields": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["ids"],

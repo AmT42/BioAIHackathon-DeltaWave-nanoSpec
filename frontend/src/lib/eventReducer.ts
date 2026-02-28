@@ -1,4 +1,11 @@
 import { Turn, WorkStep, WsEvent } from "@/types/events";
+import { KgMergedGraph } from "@/types/kgGraph";
+import {
+  createEmptyKgMergedGraph,
+  extractKgSubgraphFromToolResult,
+  mergeSubgraphIntoThreadGraph,
+  recomputeMergedImportanceStats,
+} from "@/lib/kgGraph";
 
 type HydratedMessage = {
   id: string;
@@ -14,6 +21,7 @@ export type ChatState = {
   threadId: string | null;
   activeRunId: string | null;
   turns: Turn[];
+  kgGraph: KgMergedGraph;
   error: string | null;
 };
 
@@ -27,6 +35,7 @@ export const initialChatState: ChatState = {
   threadId: null,
   activeRunId: null,
   turns: [],
+  kgGraph: createEmptyKgMergedGraph(),
   error: null,
 };
 
@@ -50,6 +59,47 @@ function safeJson(value: unknown): string {
   } catch {
     return String(value ?? "");
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function parseToolResultObject(value: unknown): Record<string, unknown> | null {
+  const direct = asRecord(value);
+  if (direct) return direct;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return asRecord(parsed);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function mergeKgGraphWithResult(
+  graph: KgMergedGraph,
+  toolName: string | undefined,
+  toolResult: Record<string, unknown> | null
+): KgMergedGraph {
+  const subgraph = extractKgSubgraphFromToolResult(toolName, toolResult);
+  if (!subgraph) return graph;
+  const merged = mergeSubgraphIntoThreadGraph(graph, subgraph);
+  return recomputeMergedImportanceStats(merged);
+}
+
+function rebuildKgGraphFromTurns(turns: Turn[]): KgMergedGraph {
+  let graph = createEmptyKgMergedGraph();
+  for (const turn of turns) {
+    for (const step of turn.workSteps) {
+      if (step.kind !== "tool") continue;
+      graph = mergeKgGraphWithResult(graph, step.toolName, step.toolResult ?? null);
+    }
+  }
+  return graph;
 }
 
 function findTurnIndexByRun(turns: Turn[], runId?: string): number {
@@ -170,7 +220,8 @@ function parseTraceToSteps(message: HydratedMessage): { assistantText: string; s
 
     if (blockType === "tool_result") {
       const toolUseId = String(block.tool_use_id ?? block.id ?? `tool-result-${message.id}-${segmentIndex}`);
-      const resultText = safeJson(block.content ?? block.result ?? "").trim();
+      const parsedResult = parseToolResultObject(block.content ?? block.result);
+      const resultText = safeJson(parsedResult ?? block.content ?? block.result ?? "").trim();
       const targetStepId = toolIndex.get(toolUseId) ?? `hist-tool-${toolUseId}`;
       const existing = steps.find((step) => step.id === targetStepId);
       const nextText = existing
@@ -184,6 +235,7 @@ function parseTraceToSteps(message: HydratedMessage): { assistantText: string; s
         segmentIndex,
         toolUseId,
         toolName: existing?.toolName,
+        toolResult: parsedResult ?? existing?.toolResult ?? null,
       });
     }
 
@@ -268,9 +320,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   }
 
   if (action.type === "HYDRATE_FROM_MESSAGES") {
+    const turns = hydrateTurns(action.messages);
     return {
       ...state,
-      turns: hydrateTurns(action.messages),
+      turns,
+      kgGraph: rebuildKgGraphFromTurns(turns),
       error: null,
     };
   }
@@ -421,11 +475,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const toolUseId = event.tool_use_id ?? `tool-${runId ?? "norun"}-${event.segment_index ?? 0}`;
       const stepId = `tool-${toolUseId}`;
       const existing = target.workSteps.find((step) => step.id === stepId);
-      const resultPayload = event.result ?? {};
+      const resultPayload = parseToolResultObject(event.result) ?? {};
       const nextStatus =
         resultPayload.status === "success" || resultPayload.status === "completed"
           ? "done"
           : "error";
+      const resolvedToolName = existing?.toolName ?? event.tool_name;
       target.workSteps = upsertWorkStep(target.workSteps, {
         id: stepId,
         kind: "tool",
@@ -433,10 +488,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         status: nextStatus,
         segmentIndex: event.segment_index,
         toolUseId,
-        toolName: existing?.toolName ?? event.tool_name,
+        toolName: resolvedToolName,
+        toolResult: resultPayload,
       });
       nextTurns[ensured.index] = target;
-      return { ...baseState, turns: nextTurns };
+
+      const nextKgGraph = mergeKgGraphWithResult(baseState.kgGraph, resolvedToolName, resultPayload);
+      return { ...baseState, turns: nextTurns, kgGraph: nextKgGraph };
     }
 
     case "main_agent_complete": {

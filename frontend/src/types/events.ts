@@ -46,6 +46,7 @@ export type WorkStep = {
   segmentIndex?: number;
   toolUseId?: string;
   toolName?: string;
+  toolResult?: Record<string, unknown> | null;
   title?: string;
 };
 

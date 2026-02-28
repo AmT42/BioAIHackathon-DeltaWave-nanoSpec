@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.agent.tools.sources.knowledge_graph import _build_query_local_node_stats
+from app.agent.tools.sources.knowledge_graph import _build_canonical_subgraph, _build_query_local_node_stats
 
 
 def _as_map_by_type(stats: dict) -> dict[str, dict]:
@@ -97,3 +97,47 @@ def test_query_local_node_stats_returns_empty_shape_without_wrapped_graph_values
     assert stats["summary"]["node_count"] == 0
     assert stats["summary"]["edge_count"] == 0
     assert stats["by_type"] == []
+
+
+def test_canonical_subgraph_shape_defaults_when_no_graph_values() -> None:
+    subgraph = _build_canonical_subgraph(records=[{"x": 1, "y": "z"}])
+    assert subgraph["summary"] == {"node_count": 0, "edge_count": 0}
+    assert subgraph["nodes"] == []
+    assert subgraph["edges"] == []
+
+
+def test_canonical_subgraph_contains_nodes_and_edges() -> None:
+    records = [
+        {
+            "d": {
+                "__kind__": "node",
+                "__element_id__": "n-drug",
+                "__labels__": ["Drug"],
+                "id": "DB001",
+                "name": "Sirolimus",
+            },
+            "p": {
+                "__kind__": "node",
+                "__element_id__": "n-protein",
+                "__labels__": ["Protein"],
+                "id": "P12345",
+                "name": "MTOR",
+            },
+            "r": {
+                "__kind__": "relationship",
+                "__element_id__": "r1",
+                "__type__": "Drug_targets_protein",
+                "__start_element_id__": "n-drug",
+                "__end_element_id__": "n-protein",
+                "confidence_score": 0.8,
+            },
+        }
+    ]
+    subgraph = _build_canonical_subgraph(records)
+    assert subgraph["summary"] == {"node_count": 2, "edge_count": 1}
+    assert {row["node_type"] for row in subgraph["nodes"]} == {"Drug", "Protein"}
+    edge = subgraph["edges"][0]
+    assert edge["source"] == "n-drug"
+    assert edge["target"] == "n-protein"
+    assert edge["type"] == "Drug_targets_protein"
+    assert edge["weight"] > 1.0
