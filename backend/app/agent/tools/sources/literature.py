@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import xml.etree.ElementTree as ET
 from typing import Any
 from urllib import parse
 import re
@@ -9,93 +11,171 @@ from app.config import Settings
 from app.agent.tools.artifacts import write_binary_file_artifact, write_raw_json_artifact
 from app.agent.tools.context import ToolContext
 from app.agent.tools.contracts import make_tool_output
-from app.agent.tools.descriptions import render_tool_description
 from app.agent.tools.errors import ToolExecutionError
 from app.agent.tools.http_client import SimpleHttpClient
 from app.agent.tools.registry import ToolSpec
 
 
-MODES = {"precision", "balanced", "recall"}
+_NCT_PATTERN = re.compile(r"\bNCT\d{8}\b", flags=re.IGNORECASE)
+_YEAR_PATTERN = re.compile(r"(19|20)\d{2}")
 
 
 def _request_id(headers: dict[str, str]) -> str | None:
     return headers.get("x-request-id") or headers.get("x-amzn-requestid")
 
 
-def _ensure_openalex_key(settings: Settings) -> str:
-    if not settings.openalex_api_key:
-        raise ToolExecutionError(
-            code="UNCONFIGURED",
-            message="OPENALEX_API_KEY is required for OpenAlex tools",
-            details={"env": "OPENALEX_API_KEY"},
-        )
-    return settings.openalex_api_key
+def _openalex_auth_params(settings: Settings) -> dict[str, str]:
+    params: dict[str, str] = {}
+    api_key = str(settings.openalex_api_key or "").strip()
+    mailto = str(settings.openalex_mailto or "").strip()
+    if api_key:
+        params["api_key"] = api_key
+    if mailto:
+        params["mailto"] = mailto
+    if params:
+        return params
+    raise ToolExecutionError(
+        code="UNCONFIGURED",
+        message="OpenAlex tools require OPENALEX_API_KEY or OPENALEX_MAILTO",
+        details={"env": ["OPENALEX_API_KEY", "OPENALEX_MAILTO"]},
+    )
 
 
-def _require_query(payload: dict[str, Any], key: str = "query") -> str:
-    value = str(payload.get(key, "")).strip()
-    if not value:
-        raise ToolExecutionError(code="VALIDATION_ERROR", message=f"'{key}' is required")
-    return value
+def _as_pubmed_params(settings: Settings, base: dict[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    if settings.pubmed_api_key:
+        out["api_key"] = settings.pubmed_api_key
+    return out
 
 
-def _require_mode(payload: dict[str, Any]) -> str:
-    mode = str(payload.get("mode", "balanced")).strip().lower()
-    if mode not in MODES:
-        raise ToolExecutionError(
-            code="VALIDATION_ERROR",
-            message="'mode' must be one of: precision, balanced, recall",
-            details={"allowed": sorted(MODES)},
-        )
-    return mode
-
-
-def _limit_for_mode(payload: dict[str, Any], *, default_precision: int, default_balanced: int, default_recall: int, maximum: int) -> int:
-    mode = _require_mode(payload)
-    default = {
-        "precision": default_precision,
-        "balanced": default_balanced,
-        "recall": default_recall,
-    }[mode]
-    raw = payload.get("limit", default)
+def _safe_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
     try:
-        value = int(raw)
-    except Exception as exc:
-        raise ToolExecutionError(code="VALIDATION_ERROR", message="'limit' must be an integer") from exc
-    if value < 1 or value > maximum:
+        parsed = int(value)
+    except Exception:
+        parsed = default
+    return min(max(parsed, minimum), maximum)
+
+
+def _extract_year(text: Any) -> int | None:
+    match = _YEAR_PATTERN.search(str(text or ""))
+    if not match:
+        return None
+    try:
+        return int(match.group(0))
+    except Exception:
+        return None
+
+
+def _text(element: ET.Element | None) -> str | None:
+    if element is None:
+        return None
+    value = "".join(element.itertext()).strip()
+    return value or None
+
+
+def _parse_pubmed_xml_records(xml_text: str) -> list[dict[str, Any]]:
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError as exc:
         raise ToolExecutionError(
-            code="VALIDATION_ERROR",
-            message=f"'limit' must be between 1 and {maximum}",
-            details={"limit": value, "max": maximum},
-        )
-    return value
+            code="UPSTREAM_ERROR",
+            message="PubMed eFetch returned invalid XML payload",
+            details={"source": "pubmed_efetch"},
+        ) from exc
 
-
-def _require_ids(payload: dict[str, Any], *, max_size: int = 200) -> list[str]:
-    ids = payload.get("ids")
-    if not isinstance(ids, list) or not ids:
-        raise ToolExecutionError(code="VALIDATION_ERROR", message="'ids' must be a non-empty list")
-
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for item in ids:
-        value = str(item or "").strip()
-        if not value:
+    records: list[dict[str, Any]] = []
+    for article in root.findall(".//PubmedArticle"):
+        medline = article.find("MedlineCitation")
+        pubmed_data = article.find("PubmedData")
+        if medline is None:
             continue
-        if value in seen:
-            continue
-        seen.add(value)
-        cleaned.append(value)
 
-    if not cleaned:
-        raise ToolExecutionError(code="VALIDATION_ERROR", message="No valid IDs provided in 'ids'")
-    if len(cleaned) > max_size:
-        raise ToolExecutionError(
-            code="VALIDATION_ERROR",
-            message=f"Too many IDs. Maximum is {max_size}",
-            details={"provided": len(cleaned), "max": max_size},
+        pmid = _text(medline.find("PMID"))
+        art = medline.find("Article")
+
+        title = _text(art.find("ArticleTitle")) if art is not None else None
+
+        abstract_parts: list[str] = []
+        if art is not None:
+            for abs_node in art.findall("./Abstract/AbstractText"):
+                label = str(abs_node.attrib.get("Label") or "").strip() if isinstance(abs_node.attrib, dict) else ""
+                abs_text = _text(abs_node)
+                if not abs_text:
+                    continue
+                abstract_parts.append(f"{label}: {abs_text}" if label else abs_text)
+        abstract = "\n".join(abstract_parts) if abstract_parts else None
+
+        journal = _text(art.find("./Journal/Title")) if art is not None else None
+        pub_date = None
+        if art is not None:
+            pub_date_node = art.find("./Journal/JournalIssue/PubDate")
+            if pub_date_node is not None:
+                year = _text(pub_date_node.find("Year"))
+                month = _text(pub_date_node.find("Month"))
+                day = _text(pub_date_node.find("Day"))
+                medline_date = _text(pub_date_node.find("MedlineDate"))
+                pub_date = " ".join(part for part in [year, month, day] if part) or medline_date
+
+        publication_types: list[str] = []
+        if art is not None:
+            for pub_type_node in art.findall("./PublicationTypeList/PublicationType"):
+                pub_type = _text(pub_type_node)
+                if pub_type:
+                    publication_types.append(pub_type)
+
+        mesh_terms: list[str] = []
+        for mesh_node in medline.findall("./MeshHeadingList/MeshHeading/DescriptorName"):
+            mesh_value = _text(mesh_node)
+            if mesh_value:
+                mesh_terms.append(mesh_value)
+
+        doi = None
+        nct_ids: list[str] = []
+        if pubmed_data is not None:
+            for article_id in pubmed_data.findall("./ArticleIdList/ArticleId"):
+                value = _text(article_id)
+                id_type = str(article_id.attrib.get("IdType") or "").lower()
+                if not value:
+                    continue
+                if id_type == "doi" and doi is None:
+                    doi = value
+                if value.upper().startswith("NCT"):
+                    nct_ids.append(value.upper())
+
+        if abstract:
+            nct_ids.extend(match.upper() for match in _NCT_PATTERN.findall(abstract))
+
+        dedup_nct_ids: list[str] = []
+        seen_nct: set[str] = set()
+        for nct in nct_ids:
+            key = nct.upper()
+            if key in seen_nct:
+                continue
+            seen_nct.add(key)
+            dedup_nct_ids.append(key)
+
+        lower_mesh = {value.lower() for value in mesh_terms}
+        humans = "humans" in lower_mesh
+        animals = "animals" in lower_mesh
+
+        records.append(
+            {
+                "pmid": pmid,
+                "title": title,
+                "abstract": abstract,
+                "publication_types": publication_types,
+                "mesh_terms": mesh_terms,
+                "journal": journal,
+                "pub_date": pub_date,
+                "publication_year": _extract_year(pub_date),
+                "doi": doi,
+                "nct_ids": dedup_nct_ids,
+                "humans": humans,
+                "animals": animals,
+            }
         )
-    return cleaned
+
+    return records
 
 
 def _compact_openalex_record(work: dict[str, Any]) -> dict[str, Any]:
@@ -116,330 +196,88 @@ def _compact_openalex_record(work: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _pubmed_api_params(settings: Settings, **kwargs: Any) -> dict[str, Any]:
-    params = {k: v for k, v in kwargs.items() if v is not None}
-    if settings.pubmed_api_key:
-        params["api_key"] = settings.pubmed_api_key
-    return params
+def _compact_europmc_record(record: dict[str, Any]) -> dict[str, Any]:
+    pmid = str(record.get("pmid") or "").strip() or None
+    pmcid = str(record.get("pmcid") or "").strip() or None
+    doi = str(record.get("doi") or "").strip() or None
+    year = _extract_year(record.get("pubYear") or record.get("firstPublicationDate"))
+    source = str(record.get("source") or "").strip().upper() or None
+    if source == "MED" and pmid:
+        record_id = f"PMID:{pmid}"
+    elif source == "PMC" and pmcid:
+        record_id = f"PMCID:{pmcid}"
+    elif doi:
+        record_id = f"DOI:{doi}"
+    else:
+        record_id = str(record.get("id") or "").strip() or None
+
+    return {
+        "id": record_id,
+        "title": record.get("title"),
+        "publication_year": year,
+        "source": source,
+        "pmid": pmid,
+        "pmcid": pmcid,
+        "doi": doi,
+        "journal": record.get("journalTitle"),
+        "author_string": record.get("authorString"),
+        "is_open_access": str(record.get("isOpenAccess") or "N").upper() == "Y",
+        "abstract_snippet": (str(record.get("abstractText") or "")[:400] or None),
+    }
 
 
-def _extract_abstracts_from_efetch_xml(xml_text: str) -> dict[str, str]:
-    try:
-        root = ET.fromstring(xml_text)
-    except Exception:
-        return {}
+def _europepmc_record_query_from_id(raw_id: str, id_type: str) -> str:
+    clean = str(raw_id or "").strip()
+    if not clean:
+        raise ToolExecutionError(code="VALIDATION_ERROR", message="Empty Europe PMC record ID")
 
-    out: dict[str, str] = {}
-    for article in root.findall(".//PubmedArticle"):
-        pmid_node = article.find(".//PMID")
-        if pmid_node is None or not (pmid_node.text or "").strip():
-            continue
-        pmid = (pmid_node.text or "").strip()
-        abstract_parts: list[str] = []
-        for abstract_text in article.findall(".//Abstract/AbstractText"):
-            label = abstract_text.attrib.get("Label") if isinstance(abstract_text.attrib, dict) else None
-            text = "".join(abstract_text.itertext()).strip()
-            if not text:
-                continue
-            abstract_parts.append(f"{label}: {text}" if label else text)
-        if abstract_parts:
-            out[pmid] = "\n".join(abstract_parts)
-    return out
+    inferred = id_type
+    if inferred == "auto":
+        upper = clean.upper()
+        if upper.startswith("PMID:"):
+            inferred = "pmid"
+            clean = clean.split(":", 1)[1]
+        elif upper.startswith("PMCID:"):
+            inferred = "pmcid"
+            clean = clean.split(":", 1)[1]
+        elif upper.startswith("DOI:"):
+            inferred = "doi"
+            clean = clean.split(":", 1)[1]
+        elif upper.startswith("PMC"):
+            inferred = "pmcid"
+        elif clean.isdigit():
+            inferred = "pmid"
+        elif "/" in clean:
+            inferred = "doi"
+        else:
+            inferred = "pmid"
 
-
-def _local_name(tag: Any) -> str:
-    if not isinstance(tag, str):
-        return ""
-    return tag.split("}", 1)[-1] if "}" in tag else tag
-
-
-def _extract_pmcid_from_article_ids(article_ids: list[Any]) -> str | None:
-    for aid in article_ids:
-        if not isinstance(aid, dict):
-            continue
-        idtype = str(aid.get("idtype") or "").strip().lower()
-        value = str(aid.get("value") or "").strip()
-        if not value:
-            continue
-        if idtype == "pmc":
-            upper = value.upper()
-            return upper if upper.startswith("PMC") else f"PMC{value}"
-        if idtype == "pmcid":
-            match = re.search(r"(PMC\d+)", value, flags=re.IGNORECASE)
-            if match:
-                return match.group(1).upper()
-    return None
-
-
-def _extract_pdf_url_from_pmc_oa_xml(xml_text: str) -> str | None:
-    try:
-        root = ET.fromstring(xml_text)
-    except Exception:
-        return None
-
-    for node in root.iter():
-        if _local_name(node.tag) != "link":
-            continue
-        attrs = node.attrib if isinstance(node.attrib, dict) else {}
-        fmt = str(attrs.get("format") or "").strip().lower()
-        href = str(attrs.get("href") or attrs.get("{http://www.w3.org/1999/xlink}href") or "").strip()
-        if not href:
-            continue
-        if fmt == "pdf" or href.lower().endswith(".pdf"):
-            return href
-    return None
-
-
-def _normalize_pdf_download_url(url: str) -> str:
-    if url.lower().startswith("ftp://"):
-        return "https://" + url[6:]
-    return url
+    if inferred == "pmid":
+        return f"EXT_ID:{clean} AND SRC:MED"
+    if inferred == "pmcid":
+        return f"EXT_ID:{clean} AND SRC:PMC"
+    if inferred == "doi":
+        return f'DOI:"{clean}"'
+    raise ToolExecutionError(code="VALIDATION_ERROR", message="'id_type' must be one of auto|pmid|pmcid|doi")
 
 
 def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSpec]:
-    def pubmed_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
-        query = _require_query(payload)
-        mode = _require_mode(payload)
-        limit = _limit_for_mode(payload, default_precision=25, default_balanced=100, default_recall=250, maximum=500)
+    def openalex_search_works(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        auth_params = _openalex_auth_params(settings)
+        query = str(payload.get("query", "")).strip()
+        if not query:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'query' is required")
 
-        page_token = str(payload.get("page_token", "")).strip() or "0"
-        try:
-            retstart = max(int(page_token), 0)
-        except Exception as exc:
-            raise ToolExecutionError(code="VALIDATION_ERROR", message="'page_token' must be an integer offset string") from exc
-
-        sort = str(payload.get("sort", "relevance")).strip().lower() or "relevance"
-        if sort not in {"relevance", "pub date"}:
-            raise ToolExecutionError(code="VALIDATION_ERROR", message="'sort' must be 'relevance' or 'pub date'")
-
-        params = _pubmed_api_params(
-            settings,
-            db="pubmed",
-            term=query,
-            retmode="json",
-            retmax=limit,
-            retstart=retstart,
-            usehistory="y",
-            sort=sort,
-        )
-        data, headers = http.get_json(url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi", params=params)
-        artifact_refs: list[dict[str, Any]] = []
-        raw_ref = write_raw_json_artifact(ctx, f"pubmed_search_{retstart}", data) if ctx else None
-        if raw_ref:
-            artifact_refs.append(raw_ref)
-
-        search = (data or {}).get("esearchresult") or {}
-        ids = [str(item) for item in (search.get("idlist") or []) if str(item).strip()]
-        count = int(search.get("count") or 0)
-        next_offset = retstart + len(ids)
-        has_more = next_offset < count
-
-        return make_tool_output(
-            source="pubmed",
-            summary=f"Retrieved {len(ids)} PMID(s) from PubMed search.",
-            result_kind="id_list",
-            data={
-                "query": query,
-                "mode": mode,
-                "count": count,
-                "retstart": retstart,
-                "webenv": search.get("webenv"),
-                "query_key": search.get("querykey"),
-                "query_translation": search.get("querytranslation"),
-            },
-            ids=ids,
-            artifacts=artifact_refs,
-            pagination={"next_page_token": str(next_offset) if has_more else None, "has_more": has_more},
-            request_id=_request_id(headers),
-            ctx=ctx,
-        )
-
-    def pubmed_fetch(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
-        ids = _require_ids(payload, max_size=200)
-        mode = _require_mode(payload)
-        include_full_text = bool(payload.get("include_full_text", True))
-        download_pdf = bool(payload.get("download_pdf", True))
-        pdf_max_bytes_raw = payload.get("pdf_max_bytes", 15_000_000)
-        try:
-            pdf_max_bytes = int(pdf_max_bytes_raw)
-        except Exception as exc:
-            raise ToolExecutionError(code="VALIDATION_ERROR", message="'pdf_max_bytes' must be an integer") from exc
-        if pdf_max_bytes < 100_000 or pdf_max_bytes > 100_000_000:
-            raise ToolExecutionError(
-                code="VALIDATION_ERROR",
-                message="'pdf_max_bytes' must be between 100000 and 100000000",
-                details={"pdf_max_bytes": pdf_max_bytes},
-            )
-        fields = payload.get("fields") or []
-        if fields is not None and not isinstance(fields, list):
-            raise ToolExecutionError(code="VALIDATION_ERROR", message="'fields' must be a list of field names")
-        selected_fields = {str(item).strip() for item in fields if str(item).strip()}
-        warnings: list[str] = []
-        if payload.get("include_abstract") is False:
-            warnings.append("include_abstract=false ignored; abstracts are always included for pubmed_fetch.")
-
-        params = _pubmed_api_params(
-            settings,
-            db="pubmed",
-            id=",".join(ids),
-            retmode="json",
-        )
-        summary_data, headers = http.get_json(
-            url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
-            params=params,
-        )
-
-        abstracts_by_pmid: dict[str, str] = {}
-        pdf_url_by_pmid: dict[str, str] = {}
-        pdf_downloaded_pmids: set[str] = set()
-        pdf_artifact_by_pmid: dict[str, dict[str, Any]] = {}
-        artifacts: list[dict[str, Any]] = []
-        fetch_params = _pubmed_api_params(
-            settings,
-            db="pubmed",
-            id=",".join(ids),
-            retmode="xml",
-        )
-        xml_text, _ = http.get_text(url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi", params=fetch_params)
-        abstracts_by_pmid = _extract_abstracts_from_efetch_xml(xml_text)
-        xml_ref = write_raw_json_artifact(ctx, "pubmed_fetch_xml_metadata", {"xml_size": len(xml_text)}) if ctx else None
-        if xml_ref:
-            artifacts.append(xml_ref)
-
-        result = (summary_data or {}).get("result") or {}
-        uids = [str(item) for item in (result.get("uids") or []) if str(item).strip()]
-
-        pmcid_by_pmid: dict[str, str] = {}
-        if include_full_text:
-            for uid in uids:
-                item = result.get(uid) or {}
-                article_ids = list(item.get("articleids") or [])
-                pmcid = _extract_pmcid_from_article_ids(article_ids)
-                if pmcid:
-                    pmcid_by_pmid[uid] = pmcid
-
-            for pmid, pmcid in pmcid_by_pmid.items():
-                try:
-                    oa_xml, _ = http.get_text(
-                        url="https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi",
-                        params={"id": pmcid},
-                    )
-                    pdf_url = _extract_pdf_url_from_pmc_oa_xml(oa_xml)
-                    if not pdf_url:
-                        warnings.append(f"No OA PDF link for PMID {pmid} (PMCID {pmcid}).")
-                        continue
-                    pdf_url_by_pmid[pmid] = pdf_url
-
-                    if download_pdf:
-                        pdf_download_url = _normalize_pdf_download_url(pdf_url)
-                        pdf_bytes, _ = http.get_bytes(url=pdf_download_url)
-                        if len(pdf_bytes) > pdf_max_bytes:
-                            warnings.append(
-                                f"PDF too large for PMID {pmid}: {len(pdf_bytes)} bytes exceeds pdf_max_bytes={pdf_max_bytes}."
-                            )
-                            continue
-                        if not pdf_bytes.startswith(b"%PDF"):
-                            warnings.append(f"Downloaded file is not a PDF for PMID {pmid}.")
-                            continue
-                        pdf_downloaded_pmids.add(pmid)
-                        pdf_ref = write_binary_file_artifact(ctx, f"pubmed_{pmid}.pdf", pdf_bytes) if ctx else None
-                        if pdf_ref:
-                            artifacts.append(pdf_ref)
-                            pdf_artifact_by_pmid[pmid] = pdf_ref
-                except ToolExecutionError:
-                    warnings.append(f"PDF unavailable for PMID {pmid} (PMCID {pmcid}).")
-
-            if include_full_text and pmcid_by_pmid and not pdf_url_by_pmid:
-                warnings.append("No OA PDF links found for PMCID-linked records.")
-            if include_full_text and not pmcid_by_pmid:
-                warnings.append("No PMCID found in PubMed records; PDF retrieval skipped.")
-
-        records: list[dict[str, Any]] = []
-        for uid in uids:
-            item = result.get(uid) or {}
-            pub_types = list(item.get("pubtype") or [])
-            article_ids = list(item.get("articleids") or [])
-            doi = None
-            pmcid = _extract_pmcid_from_article_ids(article_ids)
-            for aid in article_ids:
-                if isinstance(aid, dict) and str(aid.get("idtype") or "").lower() == "doi":
-                    doi = aid.get("value")
-                    break
-
-            record = {
-                "pmid": uid,
-                "title": item.get("title"),
-                "pubdate": item.get("pubdate"),
-                "source": item.get("source"),
-                "pub_types": pub_types,
-                "article_ids": article_ids,
-                "doi": doi,
-                "pmcid": pmcid,
-                "is_meta_or_systematic": any("meta" in str(pt).lower() or "systematic" in str(pt).lower() for pt in pub_types),
-                "is_rct_like": any("randomized" in str(pt).lower() or "clinical trial" in str(pt).lower() for pt in pub_types),
-            }
-            record["abstract"] = abstracts_by_pmid.get(uid)
-            if include_full_text:
-                pdf_ref = pdf_artifact_by_pmid.get(uid)
-                record["pdf_url"] = pdf_url_by_pmid.get(uid)
-                record["pdf_downloaded"] = uid in pdf_downloaded_pmids
-                record["pdf_artifact_path"] = pdf_ref.get("path") if isinstance(pdf_ref, dict) else None
-            records.append(record)
-
-        if selected_fields:
-            filtered_records: list[dict[str, Any]] = []
-            mandatory_fields = {"pmid", "abstract"}
-            if include_full_text:
-                mandatory_fields.update({"pdf_url", "pdf_downloaded", "pdf_artifact_path"})
-            for record in records:
-                filtered = {k: v for k, v in record.items() if k in selected_fields or k in mandatory_fields}
-                filtered_records.append(filtered)
-            records = filtered_records
-
-        raw_ref = write_raw_json_artifact(ctx, "pubmed_fetch_esummary", summary_data) if ctx else None
-        if raw_ref:
-            artifacts.append(raw_ref)
-
-        return make_tool_output(
-            source="pubmed",
-            summary=f"Fetched {len(records)} PubMed record(s).",
-            result_kind="record_list",
-            data={
-                "mode": mode,
-                "include_abstract": True,
-                "include_full_text": include_full_text,
-                "download_pdf": download_pdf if include_full_text else None,
-                "pdf_max_bytes": pdf_max_bytes if include_full_text else None,
-                "records": records,
-            },
-            ids=[record.get("pmid") for record in records if record.get("pmid")],
-            citations=[{"pmid": rec.get("pmid"), "doi": rec.get("doi"), "title": rec.get("title"), "year": rec.get("pubdate")} for rec in records],
-            warnings=warnings,
-            artifacts=artifacts,
-            request_id=_request_id(headers),
-            ctx=ctx,
-        )
-
-    def openalex_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
-        key = _ensure_openalex_key(settings)
-        query = _require_query(payload)
-        mode = _require_mode(payload)
-        limit = _limit_for_mode(payload, default_precision=20, default_balanced=50, default_recall=100, maximum=200)
-
-        page_token = str(payload.get("page_token", "")).strip() or "1"
-        try:
-            page = max(int(page_token), 1)
-        except Exception as exc:
-            raise ToolExecutionError(code="VALIDATION_ERROR", message="'page_token' must be an integer page string") from exc
-
+        per_page = _safe_int(payload.get("per_page", 25), default=25, minimum=1, maximum=200)
+        page = _safe_int(payload.get("page", 1), default=1, minimum=1, maximum=10_000)
         filter_value = str(payload.get("filter", "")).strip() or None
 
         params = {
             "search": query,
-            "per-page": limit,
+            "per-page": per_page,
             "page": page,
-            "api_key": key,
         }
+        params.update(auth_params)
         if filter_value:
             params["filter"] = filter_value
 
@@ -455,51 +293,60 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
 
         meta = (data or {}).get("meta") or {}
         count = int(meta.get("count") or 0)
-        has_more = bool(page * limit < count)
+        has_more = bool(page * per_page < count)
+
+        citations = [
+            {
+                "openalex_id": item.get("id"),
+                "doi": item.get("doi"),
+                "pmid": item.get("pmid"),
+                "title": item.get("display_name"),
+                "year": item.get("publication_year"),
+            }
+            for item in compact
+        ]
 
         return make_tool_output(
             source="openalex",
             summary=f"Retrieved {len(compact)} OpenAlex work(s) for query '{query}'.",
-            result_kind="record_list",
-            data={"query": query, "mode": mode, "works": compact, "meta": meta},
+            data={"query": query, "works": compact, "meta": meta},
             ids=ids,
-            citations=[
-                {
-                    "openalex_id": item.get("id"),
-                    "doi": item.get("doi"),
-                    "pmid": item.get("pmid"),
-                    "title": item.get("display_name"),
-                    "year": item.get("publication_year"),
-                }
-                for item in compact
-            ],
+            citations=citations,
             artifacts=artifacts,
-            pagination={"next_page_token": str(page + 1) if has_more else None, "has_more": has_more},
+            pagination={
+                "next_page_token": str(page + 1) if has_more else None,
+                "has_more": has_more,
+            },
             request_id=_request_id(headers),
-            auth_required=True,
-            auth_configured=bool(settings.openalex_api_key),
             ctx=ctx,
         )
 
-    def openalex_fetch(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
-        key = _ensure_openalex_key(settings)
-        ids = _require_ids(payload, max_size=50)
-        mode = _require_mode(payload)
+    def openalex_get_works(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        auth_params = _openalex_auth_params(settings)
+        ids = payload.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'ids' must be a non-empty list")
 
         records: list[dict[str, Any]] = []
         warnings: list[str] = []
         artifacts: list[dict[str, Any]] = []
+        request_id: str | None = None
 
-        for raw in ids:
+        for raw_id in ids:
+            raw = str(raw_id).strip()
+            if not raw:
+                continue
             if raw.startswith("https://openalex.org/"):
                 work_id = raw.rsplit("/", 1)[-1]
             else:
                 work_id = raw
             url = f"https://api.openalex.org/works/{parse.quote(work_id)}"
             try:
-                data, headers = http.get_json(url=url, params={"api_key": key})
-                records.append(_compact_openalex_record(data))
-                raw_ref = write_raw_json_artifact(ctx, f"openalex_fetch_{work_id}", data) if ctx else None
+                data, headers = http.get_json(url=url, params=auth_params)
+                compact = _compact_openalex_record(data)
+                records.append(compact)
+                request_id = request_id or _request_id(headers)
+                raw_ref = write_raw_json_artifact(ctx, f"openalex_work_{work_id}", data) if ctx else None
                 if raw_ref:
                     artifacts.append(raw_ref)
             except ToolExecutionError as exc:
@@ -507,9 +354,8 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
 
         return make_tool_output(
             source="openalex",
-            summary=f"Fetched {len(records)} OpenAlex record(s).",
-            result_kind="record_list",
-            data={"mode": mode, "records": records},
+            summary=f"Fetched {len(records)} OpenAlex work record(s).",
+            data={"records": records},
             ids=[item.get("id") for item in records if item.get("id")],
             citations=[
                 {
@@ -523,106 +369,648 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
             ],
             warnings=warnings,
             artifacts=artifacts,
-            request_id=_request_id(headers) if "headers" in locals() else None,
-            auth_required=True,
-            auth_configured=bool(settings.openalex_api_key),
+            request_id=request_id,
             ctx=ctx,
         )
 
-    return [
-        ToolSpec(
-            name="pubmed_search",
-            description=render_tool_description(
-                purpose="Search PubMed as the primary biomedical literature source.",
-                when=["you need biomedical evidence retrieval", "starting high-evidence-first literature discovery"],
-                avoid=["you already have exact PMID list", "you need full paper metadata fetch"],
-                critical_args=["query: PubMed query string", "mode: precision/balanced/recall", "limit/page_token: pagination controls"],
-                returns="ID-first PMID list with count, history context, and pagination token.",
-                fails_if=["query missing", "invalid mode", "limit/page token invalid", "PubMed upstream unavailable"],
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
-                    "page_token": {"type": "string", "description": "Retstart offset as string"},
-                    "sort": {"type": "string", "enum": ["relevance", "pub date"], "default": "relevance"},
-                },
-                "required": ["query"],
+    def openalex_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        # Alias wrapper to keep stable tool names expected by downstream routing/tests.
+        remapped = {
+            "query": payload.get("query"),
+            "per_page": payload.get("limit", payload.get("per_page", 25)),
+            "page": payload.get("page", 1),
+            "filter": payload.get("filter"),
+        }
+        return openalex_search_works(remapped, ctx)
+
+    def openalex_fetch(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        remapped = {"ids": payload.get("ids")}
+        return openalex_get_works(remapped, ctx)
+
+    def pubmed_esearch(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        term = str(payload.get("term", "")).strip()
+        if not term:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'term' is required")
+
+        retmax = _safe_int(payload.get("retmax", 200), default=200, minimum=1, maximum=5000)
+        retstart = _safe_int(payload.get("retstart", 0), default=0, minimum=0, maximum=1_000_000)
+        sort = str(payload.get("sort", "relevance")).strip() or "relevance"
+        usehistory = bool(payload.get("usehistory", True))
+
+        params = _as_pubmed_params(
+            settings,
+            {
+                "db": "pubmed",
+                "term": term,
+                "retmax": retmax,
+                "retstart": retstart,
+                "retmode": "json",
+                "sort": sort,
+                "usehistory": "y" if usehistory else "n",
             },
-            handler=pubmed_search,
+        )
+
+        data, headers = http.get_json(
+            url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+            params=params,
+        )
+
+        raw_ref = write_raw_json_artifact(ctx, "pubmed_esearch", data) if ctx else None
+        artifacts = [raw_ref] if raw_ref else []
+
+        result = (data or {}).get("esearchresult") or {}
+        pmids = [str(item) for item in (result.get("idlist") or []) if str(item).strip()]
+        total_count = int(result.get("count") or 0)
+
+        return make_tool_output(
             source="pubmed",
-        ),
-        ToolSpec(
-            name="pubmed_fetch",
-            description=render_tool_description(
-                purpose="Fetch PubMed metadata records by PMID list.",
-                when=["you already have PMID IDs", "you need publication type and evidence-level metadata", "you want PubMed abstracts with optional PMC OA PDFs"],
-                avoid=["you only have free-text query", "you exceed PMID batch limits"],
-                critical_args=["ids: PMID list", "mode: kept for policy consistency", "include_full_text/download_pdf/pdf_max_bytes/fields: payload size tuning"],
-                returns="Record list keyed by PMID with publication metadata and always-included abstracts, plus optional PMCID-linked PDF metadata/artifacts.",
-                fails_if=["ids missing", "ids exceed max batch", "PubMed upstream unavailable"],
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 200},
-                    "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
-                    "include_abstract": {"type": "boolean", "default": True},
-                    "include_full_text": {"type": "boolean", "default": True},
-                    "download_pdf": {"type": "boolean", "default": True},
-                    "pdf_max_bytes": {"type": "integer", "minimum": 100000, "maximum": 100000000, "default": 15000000},
-                    "fields": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["ids"],
+            summary=f"Retrieved {len(pmids)} PMID(s) for PubMed query.",
+            data={
+                "term": term,
+                "count": total_count,
+                "pmids": pmids,
+                "query_translation": result.get("querytranslation"),
+                "webenv": result.get("webenv"),
+                "query_key": result.get("querykey"),
             },
-            handler=pubmed_fetch,
+            ids=pmids,
+            artifacts=artifacts,
+            request_id=_request_id(headers),
+            pagination={
+                "next_page_token": str(retstart + retmax) if (retstart + retmax) < total_count else None,
+                "has_more": (retstart + retmax) < total_count,
+            },
+            data_schema_version="v2.1",
+            ctx=ctx,
+        )
+
+    def pubmed_efetch(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        pmids = payload.get("pmids") or []
+        if not isinstance(pmids, list) or not pmids:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'pmids' must be a non-empty list")
+
+        clean_pmids = [str(item).strip() for item in pmids if str(item).strip()]
+        if not clean_pmids:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="No valid PMID values provided")
+
+        params = _as_pubmed_params(
+            settings,
+            {
+                "db": "pubmed",
+                "id": ",".join(clean_pmids),
+                "retmode": "xml",
+            },
+        )
+        xml_text, headers = http.get_text(
+            url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            params=params,
+        )
+        records = _parse_pubmed_xml_records(xml_text)
+
+        raw_ref = write_raw_json_artifact(ctx, "pubmed_efetch", {"xml": xml_text}) if ctx else None
+        artifacts = [raw_ref] if raw_ref else []
+
+        return make_tool_output(
             source="pubmed",
-        ),
-        ToolSpec(
-            name="openalex_search",
-            description=render_tool_description(
-                purpose="Search OpenAlex for citation expansion and cross-indexed literature discovery.",
-                when=["you need citation-graph expansion", "you need broader scholarly coverage after core PubMed retrieval"],
-                avoid=["OPENALEX_API_KEY is not configured", "using OpenAlex as sole biomedical source"],
-                critical_args=["query: OpenAlex search text", "mode: precision/balanced/recall", "limit/page_token/filter: result controls"],
-                returns="Record list of compact OpenAlex works plus pagination.",
-                fails_if=["query missing", "OpenAlex key missing", "invalid limit/page token"],
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
-                    "page_token": {"type": "string", "description": "OpenAlex page number as string"},
-                    "filter": {"type": "string"},
-                },
-                "required": ["query"],
+            summary=f"Fetched {len(records)} PubMed record(s) from eFetch.",
+            data={"records": records},
+            ids=[record.get("pmid") for record in records if record.get("pmid")],
+            citations=[
+                {
+                    "pmid": rec.get("pmid"),
+                    "doi": rec.get("doi"),
+                    "title": rec.get("title"),
+                    "year": rec.get("publication_year"),
+                }
+                for rec in records
+            ],
+            artifacts=artifacts,
+            request_id=_request_id(headers),
+            ctx=ctx,
+        )
+
+    def pubmed_fetch(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        ids = payload.get("ids")
+        if ids is None:
+            ids = payload.get("pmids")
+        if not isinstance(ids, list) or not ids:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'ids' must be a non-empty list")
+
+        clean_pmids = [str(item).strip() for item in ids if str(item).strip()]
+        if not clean_pmids:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="No valid PMID values provided")
+
+        include_abstract = bool(payload.get("include_abstract", True))
+        include_classification_fields = bool(payload.get("include_classification_fields", True))
+        fields = payload.get("fields") or []
+        if fields is not None and not isinstance(fields, list):
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'fields' must be a list")
+        selected_fields = {str(item).strip() for item in fields if str(item).strip()}
+
+        params = _as_pubmed_params(
+            settings,
+            {
+                "db": "pubmed",
+                "id": ",".join(clean_pmids),
+                "retmode": "xml",
             },
-            handler=openalex_search,
-            source="openalex",
-        ),
-        ToolSpec(
-            name="openalex_fetch",
-            description=render_tool_description(
-                purpose="Fetch full OpenAlex work records for known work IDs.",
-                when=["you already have OpenAlex IDs", "you need stable metadata for selected works"],
-                avoid=["OPENALEX_API_KEY is not configured", "you only have free-text query"],
-                critical_args=["ids: OpenAlex work IDs", "mode: policy consistency"],
-                returns="Record list for requested OpenAlex IDs.",
-                fails_if=["ids missing", "OpenAlex key missing", "invalid IDs"],
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 50},
-                    "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
+        )
+        xml_text, headers = http.get_text(
+            url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            params=params,
+        )
+        records = _parse_pubmed_xml_records(xml_text)
+
+        # Fallback enrichment: if XML record lacks publication types, pull compact metadata
+        # from ESummary so downstream RCT/systematic flags remain available.
+        missing_pub_types_pmids = [
+            str(rec.get("pmid"))
+            for rec in records
+            if rec.get("pmid") and not list(rec.get("publication_types") or [])
+        ]
+        if missing_pub_types_pmids:
+            summary_params = _as_pubmed_params(
+                settings,
+                {
+                    "db": "pubmed",
+                    "id": ",".join(missing_pub_types_pmids),
+                    "retmode": "json",
                 },
-                "required": ["ids"],
+            )
+            summary_data, _ = http.get_json(
+                url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+                params=summary_params,
+            )
+            summary_result = (summary_data or {}).get("result") or {}
+            for rec in records:
+                pmid = str(rec.get("pmid") or "")
+                if not pmid or list(rec.get("publication_types") or []):
+                    continue
+                node = summary_result.get(pmid) or {}
+                pub_types = list(node.get("pubtype") or [])
+                if pub_types:
+                    rec["publication_types"] = pub_types
+
+        processed: list[dict[str, Any]] = []
+        for record in records:
+            out = dict(record)
+            pub_types_lower = [str(item or "").lower() for item in (out.get("publication_types") or [])]
+            out["is_meta_or_systematic"] = any("meta-analysis" in item or "systematic review" in item for item in pub_types_lower)
+            out["is_rct_like"] = any("randomized controlled trial" in item or "clinical trial" in item for item in pub_types_lower)
+            if not include_abstract:
+                out.pop("abstract", None)
+            if not include_classification_fields:
+                out.pop("publication_types", None)
+                out.pop("mesh_terms", None)
+                out.pop("humans", None)
+                out.pop("animals", None)
+            if selected_fields:
+                out = {k: v for k, v in out.items() if k in selected_fields or k == "pmid"}
+            processed.append(out)
+
+        raw_ref = write_raw_json_artifact(ctx, "pubmed_fetch", {"xml": xml_text}) if ctx else None
+        artifacts = [raw_ref] if raw_ref else []
+
+        return make_tool_output(
+            source="pubmed",
+            summary=f"Fetched {len(processed)} PubMed record(s).",
+            data={"records": processed},
+            ids=[record.get("pmid") for record in processed if record.get("pmid")],
+            citations=[
+                {
+                    "pmid": rec.get("pmid"),
+                    "doi": rec.get("doi"),
+                    "title": rec.get("title"),
+                    "year": rec.get("publication_year") or _extract_year(rec.get("pub_date")),
+                }
+                for rec in processed
+            ],
+            artifacts=artifacts,
+            request_id=_request_id(headers),
+            data_schema_version="v2.1",
+            ctx=ctx,
+        )
+
+    def pubmed_enrich_pmids(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        pmids = payload.get("pmids") or payload.get("ids") or []
+        if not isinstance(pmids, list) or not pmids:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'pmids' must be a non-empty list")
+
+        clean_pmids = [str(item).strip() for item in pmids if str(item).strip()]
+        if not clean_pmids:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="No valid PMID values provided")
+
+        params = _as_pubmed_params(
+            settings,
+            {
+                "db": "pubmed",
+                "id": ",".join(clean_pmids),
+                "retmode": "json",
             },
-            handler=openalex_fetch,
-            source="openalex",
-        ),
-    ]
+        )
+        data, headers = http.get_json(
+            url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+            params=params,
+        )
+
+        result = (data or {}).get("result") or {}
+        uids = [str(item) for item in (result.get("uids") or []) if str(item).strip()]
+        records: list[dict[str, Any]] = []
+        for uid in uids:
+            item = result.get(uid) or {}
+            pub_types = list(item.get("pubtype") or [])
+            article_ids = list(item.get("articleids") or [])
+            doi = None
+            for aid in article_ids:
+                if isinstance(aid, dict) and str(aid.get("idtype") or "").lower() == "doi":
+                    doi = aid.get("value")
+                    break
+            records.append(
+                {
+                    "pmid": uid,
+                    "title": item.get("title"),
+                    "pubdate": item.get("pubdate"),
+                    "source": item.get("source"),
+                    "pub_types": pub_types,
+                    "publication_types": pub_types,
+                    "article_ids": article_ids,
+                    "doi": doi,
+                    "publication_year": _extract_year(item.get("pubdate")),
+                    "is_meta_or_systematic": any(
+                        "meta" in str(pt).lower() or "systematic" in str(pt).lower() for pt in pub_types
+                    ),
+                    "is_rct_like": any("randomized" in str(pt).lower() or "clinical trial" in str(pt).lower() for pt in pub_types),
+                }
+            )
+
+        artifact_refs: list[dict[str, Any]] = []
+        raw_ref = write_raw_json_artifact(ctx, "pubmed_esummary", data) if ctx else None
+        if raw_ref:
+            artifact_refs.append(raw_ref)
+
+        return make_tool_output(
+            source="pubmed",
+            summary=f"Enriched {len(records)} PMID record(s) from PubMed metadata.",
+            data={"records": records},
+            ids=[record["pmid"] for record in records],
+            citations=[
+                {
+                    "pmid": rec["pmid"],
+                    "doi": rec.get("doi"),
+                    "title": rec.get("title"),
+                    "year": rec.get("publication_year"),
+                }
+                for rec in records
+            ],
+            artifacts=artifact_refs,
+            request_id=_request_id(headers),
+            ctx=ctx,
+        )
+
+    def pubmed_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        query = str(payload.get("query", "")).strip()
+        if not query:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'query' is required")
+        limit = _safe_int(payload.get("limit", 100), default=100, minimum=1, maximum=500)
+        page_token = str(payload.get("page_token", "")).strip() or "0"
+        try:
+            retstart = max(int(page_token), 0)
+        except Exception as exc:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'page_token' must be an integer offset string") from exc
+
+        out = pubmed_esearch(
+            {
+                "term": query,
+                "retmax": limit,
+                "retstart": retstart,
+                "sort": payload.get("sort", "relevance"),
+                "usehistory": payload.get("usehistory", True),
+            },
+            ctx,
+        )
+        data = out.get("data") if isinstance(out, dict) else {}
+        if isinstance(data, dict):
+            data = dict(data)
+            data["query"] = query
+            out["data"] = data
+        return out
+
+    def europmc_search(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        query = str(payload.get("query", "")).strip()
+        if not query:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'query' is required")
+        page_size = _safe_int(payload.get("page_size", 25), default=25, minimum=1, maximum=100)
+        page_token = str(payload.get("page_token", "")).strip() or "1"
+        try:
+            page = max(int(page_token), 1)
+        except Exception as exc:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'page_token' must be an integer page number") from exc
+
+        data, headers = http.get_json(
+            url="https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            params={
+                "query": query,
+                "format": "json",
+                "resultType": "core",
+                "pageSize": page_size,
+                "page": page,
+            },
+        )
+        result_list = (data or {}).get("resultList") or {}
+        raw_results = list(result_list.get("result") or [])
+        records = [_compact_europmc_record(item) for item in raw_results]
+
+        hit_count = _safe_int((data or {}).get("hitCount", 0), default=0, minimum=0, maximum=10_000_000)
+        has_more = page * page_size < hit_count
+
+        raw_ref = write_raw_json_artifact(ctx, f"europmc_search_page_{page}", data) if ctx else None
+        artifacts = [raw_ref] if raw_ref else []
+
+        return make_tool_output(
+            source="europmc",
+            summary=f"Retrieved {len(records)} Europe PMC record(s).",
+            data={"query": query, "records": records, "hit_count": hit_count, "page": page},
+            ids=[record.get("id") for record in records if record.get("id")],
+            citations=[
+                {
+                    "pmid": rec.get("pmid"),
+                    "pmcid": rec.get("pmcid"),
+                    "doi": rec.get("doi"),
+                    "title": rec.get("title"),
+                    "year": rec.get("publication_year"),
+                }
+                for rec in records
+            ],
+            artifacts=artifacts,
+            pagination={"next_page_token": str(page + 1) if has_more else None, "has_more": has_more},
+            request_id=_request_id(headers),
+            data_schema_version="v2.1",
+            ctx=ctx,
+        )
+
+    def europmc_fetch(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        ids = payload.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            raise ToolExecutionError(code="VALIDATION_ERROR", message="'ids' must be a non-empty list")
+        id_type = str(payload.get("id_type", "auto")).strip().lower() or "auto"
+
+        records: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        artifacts: list[dict[str, Any]] = []
+        request_id: str | None = None
+
+        for raw_id in ids[:100]:
+            clean_id = str(raw_id).strip()
+            if not clean_id:
+                continue
+            try:
+                query = _europepmc_record_query_from_id(clean_id, id_type)
+                data, headers = http.get_json(
+                    url="https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+                    params={
+                        "query": query,
+                        "format": "json",
+                        "resultType": "core",
+                        "pageSize": 1,
+                        "page": 1,
+                    },
+                )
+                request_id = request_id or _request_id(headers)
+                results = list((((data or {}).get("resultList") or {}).get("result") or []))
+                if not results:
+                    warnings.append(f"{clean_id}: no Europe PMC record found")
+                    continue
+                compact = _compact_europmc_record(results[0])
+                records.append(compact)
+                raw_ref = write_raw_json_artifact(ctx, f"europmc_fetch_{parse.quote(clean_id, safe='')}", data) if ctx else None
+                if raw_ref:
+                    artifacts.append(raw_ref)
+            except ToolExecutionError as exc:
+                warnings.append(f"{clean_id}: {exc.message}")
+
+        return make_tool_output(
+            source="europmc",
+            summary=f"Fetched {len(records)} Europe PMC record(s).",
+            data={"records": records},
+            ids=[record.get("id") for record in records if record.get("id")],
+            citations=[
+                {
+                    "pmid": rec.get("pmid"),
+                    "pmcid": rec.get("pmcid"),
+                    "doi": rec.get("doi"),
+                    "title": rec.get("title"),
+                    "year": rec.get("publication_year"),
+                }
+                for rec in records
+            ],
+            warnings=warnings,
+            artifacts=artifacts,
+            request_id=request_id,
+            data_schema_version="v2.1",
+            ctx=ctx,
+        )
+
+    tools: list[ToolSpec] = []
+
+    if settings.enable_openalex_tools and (settings.openalex_api_key or settings.openalex_mailto):
+        tools.extend(
+            [
+                ToolSpec(
+                    name="openalex_search_works",
+                    description="Search OpenAlex works and return IDs + compact metadata.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "per_page": {"type": "integer", "minimum": 1, "maximum": 200, "default": 25},
+                            "page": {"type": "integer", "minimum": 1, "default": 1},
+                            "filter": {"type": "string"},
+                        },
+                        "required": ["query"],
+                    },
+                    handler=openalex_search_works,
+                    source="openalex",
+                ),
+                ToolSpec(
+                    name="openalex_search",
+                    description="Alias: search OpenAlex works with mode/limit style arguments.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
+                            "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 25},
+                            "page": {"type": "integer", "minimum": 1, "default": 1},
+                            "filter": {"type": "string"},
+                        },
+                        "required": ["query"],
+                    },
+                    handler=openalex_search,
+                    source="openalex",
+                ),
+                ToolSpec(
+                    name="openalex_get_works",
+                    description="Fetch specific OpenAlex works by IDs.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "ids": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["ids"],
+                    },
+                    handler=openalex_get_works,
+                    source="openalex",
+                ),
+                ToolSpec(
+                    name="openalex_fetch",
+                    description="Alias: fetch OpenAlex works by ID list.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "ids": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["ids"],
+                    },
+                    handler=openalex_fetch,
+                    source="openalex",
+                ),
+            ]
+        )
+
+    if settings.enable_pubmed_tools:
+        tools.extend(
+            [
+                ToolSpec(
+                    name="pubmed_search",
+                    description=(
+                        "WHEN: Retrieve PMID IDs for a biomedical query before fetching details.\n"
+                        "AVOID: Using as a final evidence record source without pubmed_fetch.\n"
+                        "CRITICAL_ARGS: query, optional limit/page_token.\n"
+                        "RETURNS: ID-first PubMed contract with PMID list and pagination metadata.\n"
+                        "FAILS_IF: query is missing."
+                    ),
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "mode": {"type": "string", "enum": ["precision", "balanced", "recall"], "default": "balanced"},
+                            "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+                            "page_token": {"type": "string"},
+                            "sort": {"type": "string", "default": "relevance"},
+                            "usehistory": {"type": "boolean", "default": True},
+                        },
+                        "required": ["query"],
+                    },
+                    handler=pubmed_search,
+                    source="pubmed",
+                ),
+                ToolSpec(
+                    name="pubmed_fetch",
+                    description=(
+                        "WHEN: Fetch detailed PubMed records for known PMID IDs.\n"
+                        "AVOID: Passing non-PMID identifiers.\n"
+                        "CRITICAL_ARGS: ids, include_classification_fields.\n"
+                        "RETURNS: Compact records with optional publication_types/mesh/humans/animals fields.\n"
+                        "FAILS_IF: ids is missing or empty."
+                    ),
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "ids": {"type": "array", "items": {"type": "string"}},
+                            "include_abstract": {"type": "boolean", "default": True},
+                            "include_classification_fields": {"type": "boolean", "default": True},
+                            "fields": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["ids"],
+                    },
+                    handler=pubmed_fetch,
+                    source="pubmed",
+                ),
+                ToolSpec(
+                    name="pubmed_esearch",
+                    description="Search PubMed and return PMID IDs and retrieval metadata.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "term": {"type": "string"},
+                            "retmax": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 200},
+                            "retstart": {"type": "integer", "minimum": 0, "default": 0},
+                            "sort": {"type": "string", "default": "relevance"},
+                            "usehistory": {"type": "boolean", "default": True},
+                        },
+                        "required": ["term"],
+                    },
+                    handler=pubmed_esearch,
+                    source="pubmed",
+                ),
+                ToolSpec(
+                    name="pubmed_efetch",
+                    description="Fetch detailed PubMed records by PMID(s) via eFetch XML.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "pmids": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["pmids"],
+                    },
+                    handler=pubmed_efetch,
+                    source="pubmed",
+                ),
+                ToolSpec(
+                    name="pubmed_enrich_pmids",
+                    description="Enrich PMIDs using PubMed ESummary metadata for evidence classification.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "pmids": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["pmids"],
+                    },
+                    handler=pubmed_enrich_pmids,
+                    source="pubmed",
+                ),
+                ToolSpec(
+                    name="europmc_search",
+                    description=(
+                        "WHEN: Expand literature retrieval with Europe PMC coverage and OA signals.\n"
+                        "AVOID: Treating Europe PMC as a replacement for PubMed trial typing.\n"
+                        "CRITICAL_ARGS: query, optional page_size/page_token.\n"
+                        "RETURNS: ID-first compact Europe PMC records + pagination.\n"
+                        "FAILS_IF: query is missing."
+                    ),
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "page_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+                            "page_token": {"type": "string"},
+                        },
+                        "required": ["query"],
+                    },
+                    handler=europmc_search,
+                    source="europmc",
+                ),
+                ToolSpec(
+                    name="europmc_fetch",
+                    description=(
+                        "WHEN: Fetch Europe PMC records for known PMID/PMCID/DOI identifiers.\n"
+                        "AVOID: Passing unsupported ID types without id_type hints.\n"
+                        "CRITICAL_ARGS: ids, optional id_type (auto|pmid|pmcid|doi).\n"
+                        "RETURNS: Compact Europe PMC records with resolved IDs and OA flags.\n"
+                        "FAILS_IF: ids is missing or empty."
+                    ),
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "ids": {"type": "array", "items": {"type": "string"}},
+                            "id_type": {"type": "string", "enum": ["auto", "pmid", "pmcid", "doi"], "default": "auto"},
+                        },
+                        "required": ["ids"],
+                    },
+                    handler=europmc_fetch,
+                    source="europmc",
+                ),
+            ]
+        )
+
+    return tools

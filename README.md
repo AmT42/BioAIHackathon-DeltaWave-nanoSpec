@@ -73,6 +73,8 @@ Open `http://localhost:3000` (or `3001` if changed).
 - `main_agent_thinking_start` / `main_agent_thinking_token` / `main_agent_thinking_end` / `main_agent_thinking_title`
 - `main_agent_segment_start` / `main_agent_segment_token` / `main_agent_segment_end`
 - `main_agent_tool_start` / `main_agent_tool_result`
+- `main_agent_repl_start` / `main_agent_repl_code_token` / `main_agent_repl_stdout` / `main_agent_repl_stderr` / `main_agent_repl_env` / `main_agent_repl_end`
+- `main_agent_bash_command_token`
 - `main_agent_complete`
 - `main_agent_error`
 
@@ -94,6 +96,20 @@ Each `./backend/scripts/eve-up.sh` run creates:
 - `GEMINI_REASONING_EFFORT` controls Gemini thinking effort (`minimal|low|medium|high|disable|none`), default `medium`.
 - `GEMINI_INCLUDE_THOUGHTS=true` enables thought-summary streaming to the frontend.
 - Optional `GEMINI_THINKING_BUDGET` overrides the per-turn thinking token budget.
+- Tool execution uses dual mode:
+  - `repl_exec` for Python (thread-persistent variables; only printed REPL output is visible).
+  - `bash_exec` for workspace-confined shell commands (navigation, file workflow, custom API calls).
+- Retrieval policy: wrappers first (`pubmed_search/pubmed_fetch/...`) for supported sources; use `bash_exec` (`curl`/`wget`) when wrappers are missing or insufficient.
+- REPL vs bash routing:
+  - Use `bash_exec` for codebase navigation/inspection (`rg`, `ls`, `cat`), workspace file operations, project CLI tasks, and custom vendor/API calls.
+  - Use `repl_exec` for wrapper orchestration, Python data transforms, and evidence synthesis.
+- In REPL, use `help_tools()`, `help_tool("name")`, `help_repl()`, `help_examples("longevity")`, `help_examples("shell_vs_repl")`, and `env_vars()` for quick guidance/debugging.
+- REPL env snapshots are configurable (`REPL_ENV_SNAPSHOT_*`) and stream as `main_agent_repl_env` events (default `always` with redaction).
+- Import behavior is configurable (`REPL_IMPORT_POLICY`, `REPL_IMPORT_ALLOW_MODULES`, `REPL_IMPORT_DENY_MODULES`).
+- Preload-only package bootstrap is configurable (`REPL_PRELOAD_*`); lazy install is disabled by default.
+- Shell policy is configurable: `REPL_SHELL_POLICY_MODE=open|guarded`.
+- Even in `open` mode, hard blocked prefixes in `REPL_BLOCKED_COMMAND_PREFIXES` are always denied.
+- Runtime execution brief is injected into the system prompt each turn (tool list, shell policy/mode, limits, import policy, helpers), so the model uses the current environment contract.
 - `GEMINI_REPLAY_SIGNATURE_MODE` controls replay behavior when Gemini history is missing a required leading `thought_signature` (`strict` default: downgrade that historical step to text fallback; `placeholder`: inject compatibility placeholder signature).
 - Gemini requests use Google GenAI SDK streaming with thought-signature-aware tool replay.
 - If Gemini model naming fails (404 model not found), switch `GEMINI_MODEL` to a supported model for your key/project (for example `gemini/gemini-3-pro` or `gemini/gemini-3-flash`).

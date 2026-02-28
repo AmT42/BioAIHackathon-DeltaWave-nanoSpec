@@ -34,6 +34,24 @@ const SUGGESTIONS = [
   "Hyperbaric oxygen therapy",
   "Epigenetic reprogramming",
 ];
+const AUTO_SCROLL_THRESHOLD_PX = 120;
+const STREAM_FLUSH_INTERVAL_MS = 18;
+const MAX_NON_STREAM_EVENTS_PER_TICK = 8;
+const TOKEN_EVENT_TYPES = new Set<WsEvent["type"]>([
+  "main_agent_segment_token",
+  "main_agent_thinking_token",
+  "main_agent_repl_code_token",
+  "main_agent_repl_stdout",
+  "main_agent_repl_stderr",
+  "main_agent_bash_command_token",
+]);
+
+function isTokenLikeEvent(event: WsEvent): boolean {
+  if (TOKEN_EVENT_TYPES.has(event.type)) return true;
+  if (event.type !== "main_agent_tool_result") return false;
+  const status = typeof event.result?.status === "string" ? event.result.status : "";
+  return status === "streaming";
+}
 
 type ApiMessage = {
   id: string;
@@ -55,19 +73,65 @@ export default function Page() {
   const wsRef = useRef<WsClient | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  const eventQueueRef = useRef<WsEvent[]>([]);
+  const flushTimerRef = useRef<number | null>(null);
 
   const isStreaming = state.turns.some((t) => t.status === "streaming");
 
-  // Auto-scroll during streaming
-  useEffect(() => {
+  const handleMessagesScroll = useCallback(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
-    // Only auto-scroll if user is near the bottom
-    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
-    if (nearBottom || isStreaming) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    stickToBottomRef.current = distanceToBottom < AUTO_SCROLL_THRESHOLD_PX;
+  }, []);
+
+  // Auto-scroll only if the user is already near the bottom.
+  useEffect(() => {
+    if (stickToBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: isStreaming ? "auto" : "smooth" });
     }
   }, [state.turns, isStreaming]);
+
+  const flushEventQueue = useCallback(() => {
+    const queue = eventQueueRef.current;
+    if (queue.length === 0) {
+      flushTimerRef.current = null;
+      return;
+    }
+
+    let tokenDispatched = false;
+    let nonTokenCount = 0;
+    while (queue.length > 0) {
+      const nextEvent = queue.shift();
+      if (!nextEvent) break;
+      dispatch({ type: "WS_EVENT", event: nextEvent });
+
+      if (isTokenLikeEvent(nextEvent)) {
+        tokenDispatched = true;
+        break;
+      }
+
+      nonTokenCount += 1;
+      if (nonTokenCount >= MAX_NON_STREAM_EVENTS_PER_TICK) break;
+    }
+
+    flushTimerRef.current = null;
+    if (queue.length > 0) {
+      const delayMs = tokenDispatched ? STREAM_FLUSH_INTERVAL_MS : 0;
+      flushTimerRef.current = window.setTimeout(flushEventQueue, delayMs);
+    }
+  }, []);
+
+  const enqueueWsEvent = useCallback(
+    (event: WsEvent) => {
+      eventQueueRef.current.push(event);
+      if (flushTimerRef.current === null) {
+        flushTimerRef.current = window.setTimeout(flushEventQueue, 0);
+      }
+    },
+    [flushEventQueue]
+  );
 
   async function createThread(): Promise<string> {
     const response = await fetch(`${BACKEND_URL}/api/threads`, { method: "POST" });
@@ -97,6 +161,11 @@ export default function Page() {
   const reconnect = useCallback(async (nextThreadId?: string): Promise<void> => {
     const useThreadId = nextThreadId ?? threadId ?? (await createThread());
 
+    eventQueueRef.current = [];
+    if (flushTimerRef.current !== null) {
+      window.clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
     wsRef.current?.close();
     dispatch({ type: "RESET", threadId: useThreadId });
     setThreadId(useThreadId);
@@ -121,13 +190,13 @@ export default function Page() {
       onOpen: () => setConnected(true),
       onClose: () => setConnected(false),
       onError: (message) =>
-        dispatch({ type: "WS_EVENT", event: { type: "main_agent_error", error: message } as WsEvent }),
-      onEvent: (event) => dispatch({ type: "WS_EVENT", event }),
+        enqueueWsEvent({ type: "main_agent_error", error: message } as WsEvent),
+      onEvent: enqueueWsEvent,
     });
 
     await loadMessages(useThreadId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId]);
+  }, [enqueueWsEvent, threadId]);
 
   // Mount: load persisted thread or create new one
   useEffect(() => {
@@ -137,6 +206,11 @@ export default function Page() {
       dispatch({ type: "WS_EVENT", event: { type: "main_agent_error", error: String(error) } as WsEvent });
     });
     return () => {
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+      eventQueueRef.current = [];
       wsRef.current?.close();
       wsRef.current = null;
     };
@@ -225,36 +299,38 @@ export default function Page() {
           sidebarOpen={sidebarOpen}
         />
 
-        <div className="content-layout">
-          <section className="chat-column">
-            <div className="messages-container" ref={messagesContainerRef}>
-              {!hasTurns ? (
-                <div className="welcome">
-                  <div className="welcome__icon">&#x1F9EC;</div>
-                  <h2 className="welcome__title">Longevity Evidence Agent</h2>
-                  <p className="welcome__subtitle">
-                    AI-powered evidence grading for aging interventions. Ask about any compound
-                    or therapy to get a structured evidence report with confidence scores.
-                  </p>
-                  <div className="welcome__suggestions">
-                    {SUGGESTIONS.map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        className="welcome__suggestion"
-                        onClick={() => handleSuggestion(s)}
-                        disabled={!connected}
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                state.turns.map((turn) => <ChatMessage key={turn.id} turn={turn} />)
-              )}
-              <div ref={messagesEndRef} />
+        <div
+          className="messages-container"
+          ref={messagesContainerRef}
+          onScroll={handleMessagesScroll}
+        >
+          {!hasTurns ? (
+            <div className="welcome">
+              <div className="welcome__icon">&#x1F9EC;</div>
+              <h2 className="welcome__title">Longevity Evidence Agent</h2>
+              <p className="welcome__subtitle">
+                AI-powered evidence grading for aging interventions. Ask about any compound
+                or therapy to get a structured evidence report with confidence scores.
+              </p>
+              <div className="welcome__suggestions">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    className="welcome__suggestion"
+                    onClick={() => handleSuggestion(s)}
+                    disabled={!connected}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
             </div>
+          ) : (
+            state.turns.map((turn) => <ChatMessage key={turn.id} turn={turn} />)
+          )}
+          <div ref={messagesEndRef} />
+        </div>
 
             <Composer
               onSend={handleSend}

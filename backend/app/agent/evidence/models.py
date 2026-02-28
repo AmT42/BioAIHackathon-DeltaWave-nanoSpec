@@ -69,3 +69,17 @@ class ScoreTrace:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(slots=True)
+class EvidenceGrade:
+    score: float
+    label: str
+    confidence: str
+    trace: ScoreTrace
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        out = asdict(self)
+        out["trace"] = self.trace.to_dict()
+        return out

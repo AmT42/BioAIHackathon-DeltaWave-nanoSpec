@@ -3,189 +3,155 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from app.agent.evidence.models import EvidenceGrade, EvidenceLedger, ScoreTrace
 
-_LEVEL_WEIGHTS = {
-    1: 100.0,
-    2: 85.0,
-    3: 65.0,
-    4: 40.0,
-    5: 20.0,
-    6: 10.0,
+
+_LEVEL_POINTS = {
+    1: 40.0,
+    2: 28.0,
+    3: 16.0,
+    4: 8.0,
+    5: 4.0,
+    6: 2.0,
 }
 
 _QUALITY_PENALTIES = {
-    "small_n_or_unknown": 6.0,
-    "observational_risk_confounding": 8.0,
-    "preclinical_translation_risk": 5.0,
-    "limited_metadata": 4.0,
-    "not_completed": 4.0,
-    "no_registry_results": 5.0,
-    "high_risk_bias": 10.0,
-    "severe_safety_signal": 18.0,
-}
-
-_DIRECTNESS_PENALTIES = {
-    "indirect_population": 8.0,
-    "indirect_endpoint": 10.0,
+    "limited_metadata": 1.5,
+    "population_unspecified": 1.5,
+    "observational_risk_confounding": 1.5,
+    "preclinical_translation_risk": 1.0,
+    "small_n_or_unknown": 2.0,
+    "not_completed": 2.0,
+    "no_registry_results": 1.5,
 }
 
 
-def _as_records(ledger: dict[str, Any]) -> list[dict[str, Any]]:
-    records = ledger.get("records") or []
-    return [item for item in records if isinstance(item, dict)]
+def _label_for_score(score: float) -> tuple[str, str]:
+    if score >= 85:
+        return ("A", "high")
+    if score >= 70:
+        return ("B", "moderate_high")
+    if score >= 55:
+        return ("C", "moderate")
+    if score >= 40:
+        return ("D", "low")
+    return ("E", "very_low")
 
 
-def _record_score(record: dict[str, Any]) -> tuple[float, list[dict[str, Any]]]:
-    level = int(record.get("evidence_level") or 0)
-    base = _LEVEL_WEIGHTS.get(level, 35.0)
-    penalties: list[dict[str, Any]] = []
-
-    for flag in record.get("quality_flags") or []:
-        penalty = _QUALITY_PENALTIES.get(str(flag), 0.0)
-        if penalty:
-            penalties.append({"code": f"quality:{flag}", "value": penalty})
-            base -= penalty
-
-    for flag in record.get("directness_flags") or []:
-        penalty = _DIRECTNESS_PENALTIES.get(str(flag), 0.0)
-        if penalty:
-            penalties.append({"code": f"directness:{flag}", "value": penalty})
-            base -= penalty
-
-    return max(base, 0.0), penalties
+def _record_hallmark_tags(record: Any) -> list[str]:
+    metadata = record.metadata if hasattr(record, "metadata") else (record.get("metadata") if isinstance(record, dict) else {})
+    tags = metadata.get("hallmark_tags") if isinstance(metadata, dict) else []
+    out: list[str] = []
+    for tag in tags or []:
+        text = str(tag or "").strip()
+        if text:
+            out.append(text)
+    return out
 
 
-def _mean(values: list[float]) -> float:
-    if not values:
-        return 0.0
-    return sum(values) / float(len(values))
-
-
-def grade_hybrid(
-    *,
-    ledger: dict[str, Any],
-    claim_context: dict[str, Any] | None = None,
-    severe_safety_unresolved: bool = False,
-) -> dict[str, Any]:
-    records = _as_records(ledger)
-
-    by_record_score: list[dict[str, Any]] = []
-    all_scores: list[float] = []
-    human_scores: list[float] = []
-    preclinical_scores: list[float] = []
-    all_penalties: list[dict[str, Any]] = []
-    bonuses: list[dict[str, Any]] = []
-
-    effect_counter: Counter[str] = Counter()
+def grade_ledger(ledger: EvidenceLedger) -> EvidenceGrade:
+    level_counts: Counter[int] = Counter()
+    quality_flags: Counter[str] = Counter()
+    endpoint_counts: Counter[str] = Counter()
     hallmark_tags: set[str] = set()
 
-    for record in records:
-        score, penalties = _record_score(record)
-        key = str(record.get("study_key") or "unknown")
-        by_record_score.append({"study_key": key, "score": round(score, 3), "penalties": penalties})
-        all_penalties.extend(penalties)
-        all_scores.append(score)
+    human_count = 0
+    for record in ledger.records:
+        if record.evidence_level is not None:
+            level_counts[int(record.evidence_level)] += 1
+        endpoint_counts[str(record.endpoint_class or "unknown")] += 1
+        for flag in record.quality_flags:
+            quality_flags[str(flag)] += 1
+        hallmark_tags.update(_record_hallmark_tags(record))
+        if record.population_class in {"human", "human_registry"}:
+            human_count += 1
 
-        level = int(record.get("evidence_level") or 0)
-        if level in {1, 2, 3}:
-            human_scores.append(score)
-        elif level in {4, 5, 6}:
-            preclinical_scores.append(score)
+    ces_components: dict[str, float] = {}
+    ces = 0.0
+    for level, base_points in _LEVEL_POINTS.items():
+        count = level_counts.get(level, 0)
+        if count <= 0:
+            continue
+        coverage_factor = min(1.0, 0.45 + 0.2 * float(min(count, 3)))
+        contribution = round(base_points * coverage_factor, 3)
+        ces += contribution
+        ces_components[f"level_{level}"] = contribution
+    ces = min(70.0, round(ces, 3))
 
-        direction = str(record.get("effect_direction") or "unknown")
-        effect_counter[direction] += 1
+    quality_penalty = 0.0
+    penalties: list[dict[str, Any]] = []
+    for flag, weight in _QUALITY_PENALTIES.items():
+        count = int(quality_flags.get(flag, 0))
+        if count <= 0:
+            continue
+        penalty = min(weight * count, weight * 4)
+        quality_penalty += penalty
+        penalties.append({"kind": "quality", "flag": flag, "count": count, "delta": -round(penalty, 3)})
+    quality_penalty = round(quality_penalty, 3)
 
-        metadata = record.get("metadata") or {}
-        for tag in metadata.get("hallmark_tags") or []:
-            hallmark_tags.add(str(tag))
+    consistency_bonus = 0.0
+    bonuses: list[dict[str, Any]] = []
+    if level_counts.get(1, 0) >= 1 and level_counts.get(2, 0) >= 1:
+        consistency_bonus += 4.0
+        bonuses.append({"kind": "consistency", "reason": "level1_plus_level2_present", "delta": 4.0})
+    elif level_counts.get(2, 0) >= 2:
+        consistency_bonus += 2.5
+        bonuses.append({"kind": "consistency", "reason": "multiple_level2", "delta": 2.5})
 
-    top_human = sorted(human_scores, reverse=True)[:3]
-    top_all = sorted(all_scores, reverse=True)[:5]
-    top_preclinical = sorted(preclinical_scores, reverse=True)[:4]
+    mp = 8.0 + min(18.0, float(len(hallmark_tags)) * 2.0)
+    if endpoint_counts.get("clinical_hard", 0) > 0:
+        mp += 3.0
+    if endpoint_counts.get("surrogate_biomarker", 0) > endpoint_counts.get("clinical_hard", 0):
+        mp -= 2.0
+    mp = max(0.0, min(30.0, round(mp, 3)))
 
-    if top_human:
-        ces = 0.7 * _mean(top_human) + 0.3 * _mean(top_all)
-    elif top_preclinical:
-        ces = 0.8 * _mean(top_preclinical)
-    else:
-        ces = 0.0
-
-    if effect_counter.get("benefit", 0) > 0 and effect_counter.get("harm", 0) == 0:
-        ces += 2.0
-        bonuses.append({"code": "consistency_positive_direction", "value": 2.0})
-    if effect_counter.get("harm", 0) > 0 and effect_counter.get("benefit", 0) > 0:
-        ces -= 5.0
-        all_penalties.append({"code": "inconsistency_mixed_effects", "value": 5.0})
-
-    if len(top_human) >= 3:
-        ces += 3.0
-        bonuses.append({"code": "human_replication_signal", "value": 3.0})
-
-    ces = max(0.0, min(100.0, ces))
-
-    # Mechanistic plausibility axis.
-    mp = 30.0
-    hallmark_bonus = min(30.0, len(hallmark_tags) * 5.0)
-    mp += hallmark_bonus
-    if hallmark_bonus:
-        bonuses.append({"code": "hallmark_coverage", "value": hallmark_bonus})
-
-    has_human = bool(top_human)
-    has_preclinical = bool(top_preclinical)
-    if has_human and has_preclinical:
-        mp += 10.0
-        bonuses.append({"code": "cross_species_support", "value": 10.0})
-
-    human_endpoints = {
-        str(record.get("endpoint_class") or "")
-        for record in records
-        if int(record.get("evidence_level") or 0) in {1, 2, 3}
-    }
-
-    if "surrogate_biomarker" in human_endpoints and "clinical_hard" not in human_endpoints:
-        mp -= 5.0
-        all_penalties.append({"code": "surrogate_heavy_human_evidence", "value": 5.0})
-
-    if severe_safety_unresolved:
-        mp -= 15.0
-        all_penalties.append({"code": "severe_safety_signal", "value": 15.0})
-
-    mp = max(0.0, min(100.0, mp))
-
-    raw_final = 0.7 * ces + 0.3 * mp
-    final_confidence = raw_final
+    raw = ces + mp + consistency_bonus - quality_penalty
     caps_applied: list[dict[str, Any]] = []
 
-    if not has_human:
-        if final_confidence > 40.0:
-            caps_applied.append({"cap": "no_human_evidence", "max": 40.0, "before": round(final_confidence, 3)})
-        final_confidence = min(final_confidence, 40.0)
+    has_level12 = level_counts.get(1, 0) > 0 or level_counts.get(2, 0) > 0
+    if human_count == 0:
+        raw = min(raw, 45.0)
+        caps_applied.append({"cap": 45.0, "reason": "no_human_evidence"})
+    elif not has_level12:
+        raw = min(raw, 70.0)
+        caps_applied.append({"cap": 70.0, "reason": "no_level1_level2"})
 
-    surrogate_only_human = bool(human_endpoints) and human_endpoints.issubset({"surrogate_biomarker", "mechanistic_only"})
-    if surrogate_only_human:
-        if final_confidence > 55.0:
-            caps_applied.append({"cap": "human_surrogate_only", "max": 55.0, "before": round(final_confidence, 3)})
-        final_confidence = min(final_confidence, 55.0)
+    if endpoint_counts.get("surrogate_biomarker", 0) > 0 and endpoint_counts.get("clinical_hard", 0) == 0:
+        raw = min(raw, 60.0)
+        caps_applied.append({"cap": 60.0, "reason": "surrogate_only_endpoints"})
 
-    if severe_safety_unresolved:
-        if final_confidence > 50.0:
-            caps_applied.append({"cap": "severe_safety_unresolved", "max": 50.0, "before": round(final_confidence, 3)})
-        final_confidence = min(final_confidence, 50.0)
+    final = max(0.0, min(100.0, round(raw, 3)))
+    label, confidence = _label_for_score(final)
 
-    return {
-        "ces": round(ces, 3),
-        "mp": round(mp, 3),
-        "final_confidence": round(max(0.0, min(100.0, final_confidence)), 3),
-        "penalties": all_penalties,
-        "bonuses": bonuses,
-        "caps_applied": caps_applied,
-        "score_trace": {
-            "claim_context": claim_context or {},
-            "record_scores": by_record_score,
-            "human_record_count": len(top_human),
-            "preclinical_record_count": len(top_preclinical),
-            "effect_direction_counts": dict(effect_counter),
-            "hallmark_tags": sorted(hallmark_tags),
-            "raw_final": round(raw_final, 3),
+    trace = ScoreTrace(
+        ces=round(ces, 3),
+        mp=round(mp, 3),
+        final_confidence=final,
+        penalties=penalties,
+        bonuses=bonuses,
+        caps_applied=caps_applied,
+        components={
+            "level_counts": {str(k): int(v) for k, v in sorted(level_counts.items())},
+            "ces_components": ces_components,
+            "endpoint_counts": dict(endpoint_counts),
+            "quality_flags": dict(quality_flags),
+            "hallmark_tag_count": len(hallmark_tags),
+            "human_count": human_count,
+            "quality_penalty": quality_penalty,
+            "consistency_bonus": consistency_bonus,
         },
-    }
+    )
+
+    notes: list[str] = []
+    if human_count == 0:
+        notes.append("No human evidence detected; score is capped for translational uncertainty.")
+    if endpoint_counts.get("clinical_hard", 0) == 0:
+        notes.append("No hard clinical endpoints detected.")
+
+    return EvidenceGrade(
+        score=final,
+        label=label,
+        confidence=confidence,
+        trace=trace,
+        notes=notes,
+    )

@@ -342,6 +342,7 @@ class GeminiProvider(ProviderClient):
         self,
         *,
         messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
         on_thinking_token,
         on_text_token,
     ) -> ProviderStreamResult:
@@ -356,13 +357,23 @@ class GeminiProvider(ProviderClient):
             on_thinking_token(token + " ")
 
         lowered = user_text.lower()
+        available_tool_names = {
+            str(((schema or {}).get("function") or {}).get("name") or "").strip()
+            for schema in tools
+            if isinstance(schema, dict)
+        }
         tool_calls: list[ToolCall] = []
-        if "search" in lowered:
+        if "search" in lowered and "repl_exec" in available_tool_names:
             tool_calls.append(
                 ToolCall(
                     id="mock_gemini_search_1",
-                    name="pubmed_search",
-                    input={"query": user_text, "mode": "precision", "limit": 5},
+                    name="repl_exec",
+                    input={
+                        "code": (
+                            f"result = pubmed_search(query={json.dumps(user_text)}, mode='precision', limit=5)\n"
+                            "print(result.preview())"
+                        )
+                    },
                 )
             )
             text = "I will run a quick literature search first."
@@ -485,6 +496,34 @@ class GeminiProvider(ProviderClient):
                     pass
         return {"role": role, "parts": parts}
 
+    def _sanitize_schema_for_gemini(self, node: Any) -> Any:
+        if isinstance(node, list):
+            return [self._sanitize_schema_for_gemini(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+
+        out: dict[str, Any] = {}
+        for key, value in node.items():
+            if key == "type" and isinstance(value, list):
+                type_candidates = [str(item).strip().lower() for item in value if str(item).strip()]
+                if "object" in type_candidates:
+                    out[key] = "object"
+                elif "array" in type_candidates:
+                    out[key] = "array"
+                elif "string" in type_candidates:
+                    out[key] = "string"
+                elif "integer" in type_candidates:
+                    out[key] = "integer"
+                elif "number" in type_candidates:
+                    out[key] = "number"
+                elif "boolean" in type_candidates:
+                    out[key] = "boolean"
+                elif "null" in type_candidates:
+                    out[key] = "null"
+                continue
+            out[key] = self._sanitize_schema_for_gemini(value)
+        return out
+
     def _build_tool_config(self, *, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         declarations: list[dict[str, Any]] = []
         for schema in tools:
@@ -499,7 +538,9 @@ class GeminiProvider(ProviderClient):
             declaration: dict[str, Any] = {
                 "name": name.strip(),
                 "description": str(fn.get("description") or "").strip(),
-                "parameters": fn.get("parameters") or {"type": "object", "properties": {}},
+                "parameters": self._sanitize_schema_for_gemini(
+                    fn.get("parameters") or {"type": "object", "properties": {}}
+                ),
             }
             declarations.append(declaration)
         if not declarations:
@@ -842,7 +883,12 @@ class GeminiProvider(ProviderClient):
         on_text_token,
     ) -> ProviderStreamResult:
         if self.mock_mode:
-            return self._mock_turn(messages=messages, on_thinking_token=on_thinking_token, on_text_token=on_text_token)
+            return self._mock_turn(
+                messages=messages,
+                tools=tools,
+                on_thinking_token=on_thinking_token,
+                on_text_token=on_text_token,
+            )
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY is required when MOCK_LLM=false")
 

@@ -175,14 +175,6 @@ def test_concept_merge_prefers_rxnorm_ingredient() -> None:
     assert concept["pivot"] == {"source": "rxnorm", "id": "111"}
 
 
-def test_optional_epistemonikos_requires_key() -> None:
-    settings = replace(get_settings(), epistemonikos_api_key=None)
-    tools = build_optional_source_tools(settings, FakeHttp())
-    with pytest.raises(ToolExecutionError) as exc:
-        _tool(tools, "epistemonikos_search").handler({"query": "aging", "mode": "balanced"}, None)
-    assert exc.value.code == "UNCONFIGURED"
-
-
 def test_normalize_ontology_fetch_uses_query_endpoint() -> None:
     class OlsHttp:
         def __init__(self) -> None:
@@ -324,7 +316,7 @@ def test_itp_summary_uses_requested_url_when_not_blocked() -> None:
     assert out["warnings"] == []
 
 
-def test_chebi_and_epistemonikos_endpoints() -> None:
+def test_chebi_endpoints() -> None:
     class OptionalHttp:
         def __init__(self) -> None:
             self.calls: list[tuple[str, dict | None, dict | None]] = []
@@ -358,21 +350,9 @@ def test_chebi_and_epistemonikos_endpoints() -> None:
                     },
                     {},
                 )
-            if "/v1/documents/search" in url:
-                assert headers and headers["Authorization"] == 'Token token="epi-key"'
-                return (
-                    {
-                        "search_info": {"total_results": 1},
-                        "results": [{"id": "doc1", "title": "Review", "year": 2024, "classification": "systematic-review"}],
-                    },
-                    {},
-                )
-            if "/v1/documents/doc1" in url:
-                assert headers and headers["Authorization"] == 'Token token="epi-key"'
-                return ({"id": "doc1", "title": "Review"}, {})
             raise AssertionError(f"Unhandled url: {url}")
 
-    settings = replace(get_settings(), epistemonikos_api_key="epi-key")
+    settings = replace(get_settings())
     tools = build_optional_source_tools(settings, OptionalHttp())
 
     chebi_search = _tool(tools, "chebi_search").handler({"query": "nmn", "mode": "balanced", "limit": 5}, None)
@@ -381,9 +361,3 @@ def test_chebi_and_epistemonikos_endpoints() -> None:
     chebi_fetch = _tool(tools, "chebi_fetch").handler({"ids": ["CHEBI:16708"], "mode": "balanced"}, None)
     assert chebi_fetch["data"]["records"][0]["entity"]["chebi_accession"] == "CHEBI:16708"
     assert chebi_fetch["data"]["records"][0]["synonyms"][0] == "Ade"
-
-    epi_search = _tool(tools, "epistemonikos_search").handler({"query": "rapamycin", "mode": "balanced"}, None)
-    assert epi_search["ids"] == ["doc1"]
-
-    epi_fetch = _tool(tools, "epistemonikos_fetch").handler({"ids": ["doc1"], "mode": "balanced"}, None)
-    assert epi_fetch["data"]["records"][0]["id"] == "doc1"

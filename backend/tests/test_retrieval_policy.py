@@ -1,32 +1,45 @@
 from __future__ import annotations
 
-from app.agent.tools.policy import (
-    build_pubmed_evidence_queries,
-    build_source_query_terms,
-    recommend_initial_tools_for_query,
-)
+from reports.tool_real_validation.run_tool_validation import summarize_strict_results
 
 
-def test_recommended_initial_tools_for_representative_prompts() -> None:
-    assert recommend_initial_tools_for_query("rapamycin") == ["normalize_drug", "pubmed_search", "clinicaltrials_search"]
-    assert recommend_initial_tools_for_query("NMN supplement") == ["normalize_compound", "pubmed_search", "clinicaltrials_search"]
-    assert recommend_initial_tools_for_query("HBOT for aging") == ["normalize_ontology", "pubmed_search", "clinicaltrials_search"]
-    assert recommend_initial_tools_for_query("sauna longevity") == ["normalize_ontology", "pubmed_search", "clinicaltrials_search"]
+def _row(tool: str, status: str, *, code: str | None = None, enabled: bool = True) -> dict:
+    result = {"status": status}
+    if status == "error":
+        result["error"] = {
+            "code": code or "UPSTREAM_ERROR",
+            "message": "boom",
+            "retryable": True,
+            "details": {},
+        }
+    return {
+        "tool": tool,
+        "enabled": enabled,
+        "result": result,
+    }
 
 
-def test_build_source_query_terms_respects_mode() -> None:
-    precision = build_source_query_terms(label="rapamycin", synonyms=["sirolimus", "mTOR inhibitor"], mode="precision")
-    balanced = build_source_query_terms(label="rapamycin", synonyms=["sirolimus", "mTOR inhibitor"], mode="balanced")
+def test_optional_rate_limit_does_not_fail_strict() -> None:
+    summary = summarize_strict_results(
+        [
+            _row("pubmed_fetch", "success"),
+            _row("chembl_search", "error", code="RATE_LIMIT"),
+        ]
+    )
 
-    assert len(precision["pubmed"]) <= len(balanced["pubmed"])
-    assert precision["pubmed"][0].lower() == "rapamycin"
+    assert summary["core_passed"] is True
+    assert summary["strict_passed"] is True
+    assert len(summary["optional_failures"]) == 1
 
 
-def test_build_pubmed_evidence_queries_has_tiered_templates() -> None:
-    queries = build_pubmed_evidence_queries(intervention_terms=["rapamycin", "sirolimus"], outcome_terms=["aging", "frailty"])
-    assert "systematic_reviews" in queries
-    assert "rcts" in queries
-    assert "observational" in queries
-    assert "broad" in queries
-    assert "meta-analysis[pt]" in queries["systematic_reviews"]
-    assert "randomized controlled trial[pt]" in queries["rcts"]
+def test_core_failure_fails_strict() -> None:
+    summary = summarize_strict_results(
+        [
+            _row("pubmed_fetch", "error", code="UPSTREAM_ERROR"),
+            _row("chembl_search", "error", code="UNCONFIGURED"),
+        ]
+    )
+
+    assert summary["core_passed"] is False
+    assert summary["strict_passed"] is False
+    assert "pubmed_fetch" in summary["strict_failure_tools"]

@@ -16,6 +16,13 @@ EventType = Literal[
     "main_agent_thinking_title",
     "main_agent_tool_start",
     "main_agent_tool_result",
+    "main_agent_repl_start",
+    "main_agent_repl_code_token",
+    "main_agent_repl_stdout",
+    "main_agent_repl_stderr",
+    "main_agent_repl_env",
+    "main_agent_repl_end",
+    "main_agent_bash_command_token",
     "main_agent_complete",
     "main_agent_error",
 ]
@@ -34,7 +41,11 @@ class WsEvent(BaseModel):
     message_id: str | None = None
     tool_calls: list[dict[str, Any]] | None = None
     tool_use_id: str | None = None
+    parent_tool_use_id: str | None = None
     tool_name: str | None = None
+    ui_visible: bool | None = None
     arguments: dict[str, Any] | None = None
+    code: str | None = None
     result: dict[str, Any] | None = None
+    env: dict[str, Any] | None = None
     error: str | None = None

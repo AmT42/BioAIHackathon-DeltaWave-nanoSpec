@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Literal
@@ -9,7 +10,7 @@ from typing import Any, Awaitable, Callable, Literal
 from app.agent.adapters import build_gemini_openai_messages
 from app.agent.providers import GeminiProvider
 from app.agent.prompt import DEFAULT_SYSTEM_PROMPT
-from app.agent.tools.context import ToolContext
+from app.agent.repl import ReplRuntime, ReplSessionManager
 from app.agent.tools.registry import ToolRegistry
 from app.agent.types import ToolCall
 from app.config import Settings
@@ -31,6 +32,77 @@ from app.trace_normalizer import build_trace_v1
 ProviderName = Literal["gemini"]
 Emitter = Callable[[dict[str, Any]], Awaitable[None]]
 
+_REPL_TOOL_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "repl_exec",
+        "description": (
+            "Run Python code in the persistent coding REPL for this thread. "
+            "Use this for Python logic, tool wrappers, and structured post-processing. "
+            "Do not run shell commands here; use 'bash_exec' for shell commands. "
+            "Only printed output is visible back to the model."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "Python code to execute in the thread-scoped REPL session.",
+                }
+            },
+            "required": ["code"],
+        },
+    },
+}
+
+_BASH_TOOL_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "bash_exec",
+        "description": (
+            "Run a workspace-confined bash command. "
+            "Use this for shell workflows: codebase navigation, file operations, and custom API calls "
+            "with curl/wget when wrappers are not enough."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "Shell command to execute.",
+                },
+                "timeout_s": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 120,
+                    "default": 30,
+                    "description": "Command timeout in seconds.",
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Optional working directory relative to workspace root.",
+                },
+            },
+            "required": ["command"],
+        },
+    },
+}
+
+_REPL_SESSION_MANAGER: ReplSessionManager | None = None
+_REPL_SESSION_MANAGER_LOCK = threading.Lock()
+_UI_VISIBLE_TOP_LEVEL_TOOLS = {"repl_exec", "bash_exec"}
+
+
+def _get_repl_session_manager(settings: Settings) -> ReplSessionManager:
+    global _REPL_SESSION_MANAGER
+    with _REPL_SESSION_MANAGER_LOCK:
+        if _REPL_SESSION_MANAGER is None:
+            _REPL_SESSION_MANAGER = ReplSessionManager(
+                max_sessions=settings.repl_max_sessions,
+                session_ttl_seconds=settings.repl_session_ttl_seconds,
+            )
+        return _REPL_SESSION_MANAGER
+
 
 def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -49,11 +121,43 @@ def _thinking_title(text: str, max_words: int = 10) -> str | None:
     return title
 
 
+def _chunk_text(value: str, chunk_size: int = 64) -> list[str]:
+    text = str(value or "")
+    if not text:
+        return []
+    size = max(1, int(chunk_size))
+    return [text[i : i + size] for i in range(0, len(text), size)]
+
+
 class AgentCore:
     def __init__(self, *, settings: Settings, store: ChatStore, tools: ToolRegistry) -> None:
         self.settings = settings
         self.store = store
         self.tools = tools
+        if settings.agent_execution_mode != "repl_only":
+            raise ValueError("Only 'repl_only' execution mode is supported in this build")
+        self.repl_runtime = ReplRuntime(
+            tools=tools,
+            workspace_root=settings.repl_workspace_root,
+            allowed_command_prefixes=settings.repl_allowed_command_prefixes,
+            blocked_command_prefixes=settings.repl_blocked_command_prefixes,
+            shell_policy_mode=settings.repl_shell_policy_mode,
+            max_stdout_bytes=settings.repl_max_stdout_bytes,
+            max_wall_time_seconds=settings.repl_max_wall_time_seconds,
+            max_tool_calls_per_exec=settings.repl_max_tool_calls_per_exec,
+            session_manager=_get_repl_session_manager(settings),
+            env_snapshot_mode=settings.repl_env_snapshot_mode,
+            env_snapshot_max_items=settings.repl_env_snapshot_max_items,
+            env_snapshot_max_preview_chars=settings.repl_env_snapshot_max_preview_chars,
+            env_snapshot_redact_keys=settings.repl_env_snapshot_redact_keys,
+            import_policy=settings.repl_import_policy,
+            import_allow_modules=settings.repl_import_allow_modules,
+            import_deny_modules=settings.repl_import_deny_modules,
+            lazy_install_enabled=settings.repl_lazy_install_enabled,
+            lazy_install_allowlist=settings.repl_lazy_install_allowlist,
+            lazy_install_timeout_seconds=settings.repl_lazy_install_timeout_seconds,
+            lazy_install_index_url=settings.repl_lazy_install_index_url,
+        )
         self._providers = {
             "gemini": GeminiProvider(
                 api_key=settings.gemini_api_key,
@@ -65,6 +169,50 @@ class AgentCore:
                 mock_mode=settings.mock_llm,
             ),
         }
+
+    def _runtime_system_prompt(self) -> str:
+        tool_names = sorted(self.tools.names())
+        tool_list = ", ".join(tool_names)
+        workspace_root = str(self.settings.repl_workspace_root)
+        shell_mode = self.settings.repl_shell_policy_mode
+        allowed_prefixes = ", ".join(sorted(self.settings.repl_allowed_command_prefixes))
+        blocked_prefixes = ", ".join(sorted(self.settings.repl_blocked_command_prefixes))
+        helpers = (
+            "`help_repl()`, `help_tools()`, `help_tool('name')`, "
+            "`help_examples('longevity')`, `help_examples('shell_vs_repl')`, `runtime_info()`, `env_vars()`"
+        )
+        runtime_addendum = (
+            "\n\n## Runtime Environment Brief (authoritative)\n"
+            "- Execution model: `repl_exec` for Python wrappers, `bash_exec` for shell.\n"
+            "- Use wrappers first for supported biomedical retrieval; use custom shell/API calls when wrappers are missing.\n"
+            "- Shell routing guide:\n"
+            "  - codebase navigation/inspection/editing and CLI workflows -> `bash_exec`\n"
+            "  - wrapper pipelines and structured Python transforms -> `repl_exec`\n"
+            "  - do not run shell from Python REPL blocks\n"
+            "- Available wrapper tools right now:\n"
+            f"  {tool_list}\n"
+            "- REPL helper functions available at runtime:\n"
+            f"  {helpers}\n"
+            "- Result handle ergonomics:\n"
+            "  `res.ids.head(n)`, `res.shape()`, `res.records`, `for rec in res: ...`\n"
+            "- Shell policy for `bash_exec` (workspace confined):\n"
+            f"  workspace root: {workspace_root}\n"
+            f"  mode: {shell_mode}\n"
+            f"  allowed prefixes (guarded mode): {allowed_prefixes}\n"
+            f"  blocked prefixes: {blocked_prefixes}\n"
+            f"- REPL import policy: `{self.settings.repl_import_policy}`; denylist: `{', '.join(self.settings.repl_import_deny_modules)}`\n"
+            f"- REPL preload mode: enabled={self.settings.repl_preload_enabled}, profile=`{self.settings.repl_preload_profile}`\n"
+            f"- Execution limits: max_wall={self.settings.repl_max_wall_time_seconds}s, "
+            f"max_stdout={self.settings.repl_max_stdout_bytes} bytes, "
+            f"max_tool_calls_per_exec={self.settings.repl_max_tool_calls_per_exec}\n"
+            "- Bash examples:\n"
+            "  - `bash_exec(command=\"rg -n 'normalize_merge_candidates' backend/app\")`\n"
+            "  - `bash_exec(command=\"curl -sS https://httpbin.org/get | jq .\")`\n"
+            "- REPL examples:\n"
+            "  - `res = pubmed_search(query='exercise AND alzheimer', limit=5); print(res.preview())`\n"
+            "- If uncertain about args/signatures, call `help_tool('tool_name')` first, then print previews.\n"
+        )
+        return DEFAULT_SYSTEM_PROMPT.rstrip() + runtime_addendum
 
     async def run_turn_stream(
         self,
@@ -80,6 +228,31 @@ class AgentCore:
             raise ValueError(f"Unsupported provider '{provider}'")
 
         run_id = run_id or uuid.uuid4().hex
+
+        async def emit_chunked_tokens(
+            *,
+            event_type: str,
+            segment_index: int,
+            text: str,
+            tool_use_id: str | None = None,
+            chunk_size: int = 48,
+            pace_s: float = 0.006,
+            pace_max_chunks: int = 80,
+        ) -> None:
+            chunks = _chunk_text(text, chunk_size=chunk_size)
+            for idx, chunk in enumerate(chunks):
+                payload: dict[str, Any] = {
+                    "type": event_type,
+                    "thread_id": thread_id,
+                    "run_id": run_id,
+                    "segment_index": segment_index,
+                    "token": chunk,
+                }
+                if tool_use_id:
+                    payload["tool_use_id"] = tool_use_id
+                await emit(payload)
+                if idx < pace_max_chunks:
+                    await asyncio.sleep(pace_s)
 
         await emit(
             {
@@ -115,8 +288,9 @@ class AgentCore:
             request_index += 1
 
             canonical_events = await self.store.get_canonical_events(thread_id)
-            provider_messages = build_gemini_openai_messages(canonical_events, system_prompt=DEFAULT_SYSTEM_PROMPT)
-            tool_schemas = self.tools.openai_schemas()
+            runtime_prompt = self._runtime_system_prompt()
+            provider_messages = build_gemini_openai_messages(canonical_events, system_prompt=runtime_prompt)
+            tool_schemas = [_REPL_TOOL_SCHEMA, _BASH_TOOL_SCHEMA]
 
             request_payload: dict[str, Any] = {
                 "model": self.settings.gemini_model,
@@ -244,7 +418,7 @@ class AgentCore:
                     provider_client.stream_turn,
                     messages=provider_messages,
                     tools=tool_schemas,
-                    system_prompt=DEFAULT_SYSTEM_PROMPT,
+                    system_prompt=runtime_prompt,
                     on_thinking_token=on_thinking_token,
                     on_text_token=on_text_token,
                 )
@@ -299,14 +473,11 @@ class AgentCore:
                     }
                 )
                 if not thinking_tokens:
-                    await emit(
-                        {
-                            "type": "main_agent_thinking_token",
-                            "thread_id": thread_id,
-                            "run_id": run_id,
-                            "segment_index": thinking_segment,
-                            "token": thinking_text,
-                        }
+                    await emit_chunked_tokens(
+                        event_type="main_agent_thinking_token",
+                        segment_index=thinking_segment,
+                        text=thinking_text,
+                        chunk_size=42,
                     )
 
             if thinking_segment is not None:
@@ -344,14 +515,11 @@ class AgentCore:
                     }
                 )
                 if not assistant_tokens:
-                    await emit(
-                        {
-                            "type": "main_agent_segment_token",
-                            "thread_id": thread_id,
-                            "run_id": run_id,
-                            "segment_index": assistant_segment,
-                            "token": assistant_text,
-                        }
+                    await emit_chunked_tokens(
+                        event_type="main_agent_segment_token",
+                        segment_index=assistant_segment,
+                        text=assistant_text,
+                        chunk_size=42,
                     )
 
             if assistant_segment is not None:
@@ -396,12 +564,14 @@ class AgentCore:
                 iteration_blocks.append(text_block)
 
             for tc in normalized_tool_calls:
+                tool_name = str(tc.name or "").strip()
                 block: dict[str, Any] = {
                     "type": "tool_use",
                     "id": tc.id,
                     "name": tc.name,
                     "input": tc.input,
                     "segment_index": tool_segment_by_call_id[tc.id],
+                    "ui_visible": tool_name in _UI_VISIBLE_TOP_LEVEL_TOOLS,
                 }
                 if tc.provider_specific_fields:
                     block["provider_specific_fields"] = tc.provider_specific_fields
@@ -474,17 +644,22 @@ class AgentCore:
 
             for tc in normalized_tool_calls:
                 tool_segment = tool_segment_by_call_id[tc.id]
-                await emit(
-                    {
-                        "type": "main_agent_tool_start",
-                        "thread_id": thread_id,
-                        "run_id": run_id,
-                        "segment_index": tool_segment,
-                        "tool_use_id": tc.id,
-                        "tool_name": tc.name,
-                        "arguments": tc.input,
-                    }
-                )
+                tool_name = str(tc.name or "").strip()
+                tool_ui_visible = tool_name in _UI_VISIBLE_TOP_LEVEL_TOOLS
+                show_generic_tool_card = tool_name == "bash_exec"
+                if show_generic_tool_card:
+                    await emit(
+                        {
+                            "type": "main_agent_tool_start",
+                            "thread_id": thread_id,
+                            "run_id": run_id,
+                            "segment_index": tool_segment,
+                            "tool_use_id": tc.id,
+                            "tool_name": tc.name,
+                            "arguments": tc.input,
+                            "ui_visible": True,
+                        }
+                    )
 
                 await self.store.record_tool_call(
                     thread_id=thread_id,
@@ -497,30 +672,413 @@ class AgentCore:
                 )
 
                 started_at = _utc_iso()
-                tool_result = self.tools.execute(
-                    tc.name,
-                    tc.input,
-                    ctx=ToolContext(
-                        thread_id=thread_id,
-                        run_id=run_id,
-                        request_index=request_index,
-                        user_msg_index=user_msg_index,
-                        tool_use_id=tc.id,
-                        tool_name=tc.name,
-                    ),
-                )
+                nested_events: list[dict[str, Any]] = []
+                if tc.name == "repl_exec":
+                    code = str(tc.input.get("code") or "").strip()
+                    if not code:
+                        tool_result = {
+                            "status": "error",
+                            "error": {
+                                "code": "VALIDATION_ERROR",
+                                "message": "repl_exec requires non-empty 'code'",
+                                "retryable": False,
+                                "details": {},
+                            },
+                        }
+                    else:
+                        code_chunks = _chunk_text(code, chunk_size=42)
+                        start_code = code_chunks[0] if code_chunks else ""
+                        await emit(
+                            {
+                                "type": "main_agent_repl_start",
+                                "thread_id": thread_id,
+                                "run_id": run_id,
+                                "segment_index": tool_segment,
+                                "tool_use_id": tc.id,
+                                "tool_name": tc.name,
+                                "code": start_code,
+                            }
+                        )
+                        if len(code_chunks) > 1:
+                            await emit_chunked_tokens(
+                                event_type="main_agent_repl_code_token",
+                                segment_index=tool_segment,
+                                text="".join(code_chunks[1:]),
+                                tool_use_id=tc.id,
+                                chunk_size=42,
+                            )
+
+                        def _on_nested_start(call_id: str, tool_name: str, payload: dict[str, Any]) -> None:
+                            nested_events.append(
+                                {
+                                    "kind": "start",
+                                    "call_id": call_id,
+                                    "tool_name": tool_name,
+                                    "payload": payload,
+                                    "started_at": _utc_iso(),
+                                }
+                            )
+
+                        def _on_nested_result(call_id: str, tool_name: str, result_payload: dict[str, Any]) -> None:
+                            nested_events.append(
+                                {
+                                    "kind": "result",
+                                    "call_id": call_id,
+                                    "tool_name": tool_name,
+                                    "result": result_payload,
+                                    "finished_at": _utc_iso(),
+                                }
+                            )
+
+                        loop = asyncio.get_running_loop()
+                        repl_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+                        repl_sentinel = {"type": "__done__"}
+
+                        async def _pump_repl_stream() -> None:
+                            while True:
+                                item = await repl_queue.get()
+                                if item.get("type") == "__done__":
+                                    break
+                                await emit(item)
+
+                        repl_pump_task = asyncio.create_task(_pump_repl_stream())
+
+                        def _on_stdout_chunk(chunk: str) -> None:
+                            if not chunk:
+                                return
+                            loop.call_soon_threadsafe(
+                                repl_queue.put_nowait,
+                                {
+                                    "type": "main_agent_repl_stdout",
+                                    "thread_id": thread_id,
+                                    "run_id": run_id,
+                                    "segment_index": tool_segment,
+                                    "tool_use_id": tc.id,
+                                    "content": chunk,
+                                },
+                            )
+
+                        def _on_stderr_chunk(chunk: str) -> None:
+                            if not chunk:
+                                return
+                            loop.call_soon_threadsafe(
+                                repl_queue.put_nowait,
+                                {
+                                    "type": "main_agent_repl_stderr",
+                                    "thread_id": thread_id,
+                                    "run_id": run_id,
+                                    "segment_index": tool_segment,
+                                    "tool_use_id": tc.id,
+                                    "content": chunk,
+                                },
+                            )
+
+                        repl_result = None
+                        try:
+                            repl_result = await asyncio.to_thread(
+                                self.repl_runtime.execute,
+                                thread_id=thread_id,
+                                run_id=run_id,
+                                request_index=request_index,
+                                user_msg_index=user_msg_index,
+                                execution_id=tc.id,
+                                code=code,
+                                on_tool_start=_on_nested_start,
+                                on_tool_result=_on_nested_result,
+                                on_stdout_chunk=_on_stdout_chunk,
+                                on_stderr_chunk=_on_stderr_chunk,
+                            )
+                            tool_result = repl_result.to_tool_output()
+                        except Exception as exc:  # pragma: no cover - defensive guard
+                            tool_result = {
+                                "status": "error",
+                                "error": {
+                                    "code": "REPL_RUNTIME_ERROR",
+                                    "message": f"{type(exc).__name__}: {exc}",
+                                    "retryable": True,
+                                    "details": {},
+                                },
+                            }
+                        finally:
+                            repl_queue.put_nowait(repl_sentinel)
+                            await repl_pump_task
+
+                        if repl_result is not None and repl_result.stdout:
+                            await emit(
+                                {
+                                    "type": "main_agent_repl_stdout",
+                                    "thread_id": thread_id,
+                                    "run_id": run_id,
+                                    "segment_index": tool_segment,
+                                    "tool_use_id": tc.id,
+                                    "content": repl_result.stdout,
+                                }
+                            )
+                        if repl_result is not None and repl_result.stderr:
+                            await emit(
+                                {
+                                    "type": "main_agent_repl_stderr",
+                                    "thread_id": thread_id,
+                                    "run_id": run_id,
+                                    "segment_index": tool_segment,
+                                    "tool_use_id": tc.id,
+                                    "content": repl_result.stderr,
+                                }
+                            )
+                        if repl_result is not None and isinstance(repl_result.env_snapshot, dict):
+                            await emit(
+                                {
+                                    "type": "main_agent_repl_env",
+                                    "thread_id": thread_id,
+                                    "run_id": run_id,
+                                    "segment_index": tool_segment,
+                                    "tool_use_id": tc.id,
+                                    "env": repl_result.env_snapshot,
+                                }
+                            )
+                            collected_blocks.append(
+                                {
+                                    "type": "repl_env",
+                                    "tool_use_id": tc.id,
+                                    "env": repl_result.env_snapshot,
+                                    "segment_index": tool_segment,
+                                    "ui_visible": True,
+                                }
+                            )
+                        await emit(
+                            {
+                                "type": "main_agent_repl_end",
+                                "thread_id": thread_id,
+                                "run_id": run_id,
+                                "segment_index": tool_segment,
+                                "tool_use_id": tc.id,
+                                "result": tool_result,
+                            }
+                        )
+                elif tc.name == "bash_exec":
+                    command = str(tc.input.get("command") or "").strip()
+                    if not command:
+                        tool_result = {
+                            "status": "error",
+                            "error": {
+                                "code": "VALIDATION_ERROR",
+                                "message": "bash_exec requires non-empty 'command'",
+                                "retryable": False,
+                                "details": {},
+                            },
+                        }
+                    else:
+                        timeout_raw = tc.input.get("timeout_s", 30)
+                        try:
+                            timeout_s = int(timeout_raw)
+                        except Exception:
+                            timeout_s = 30
+                        cwd_raw = tc.input.get("cwd")
+                        cwd = str(cwd_raw).strip() if isinstance(cwd_raw, str) and str(cwd_raw).strip() else None
+
+                        await emit_chunked_tokens(
+                            event_type="main_agent_bash_command_token",
+                            segment_index=tool_segment,
+                            text=command,
+                            tool_use_id=tc.id,
+                            chunk_size=30,
+                        )
+
+                        loop = asyncio.get_running_loop()
+                        bash_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+                        bash_sentinel = {"type": "__done__"}
+
+                        async def _pump_bash_stream() -> None:
+                            while True:
+                                item = await bash_queue.get()
+                                if item.get("type") == "__done__":
+                                    break
+                                await emit(item)
+
+                        bash_pump_task = asyncio.create_task(_pump_bash_stream())
+
+                        def _queue_bash_stream(field: str, chunk: str) -> None:
+                            if not chunk:
+                                return
+                            loop.call_soon_threadsafe(
+                                bash_queue.put_nowait,
+                                {
+                                    "type": "main_agent_tool_result",
+                                    "thread_id": thread_id,
+                                    "run_id": run_id,
+                                    "segment_index": tool_segment,
+                                    "tool_use_id": tc.id,
+                                    "tool_name": tc.name,
+                                    "ui_visible": True,
+                                    "result": {
+                                        "status": "streaming",
+                                        "output": {
+                                            "command": command,
+                                            field: chunk,
+                                        },
+                                    },
+                                },
+                            )
+
+                        def _on_bash_stdout(chunk: str) -> None:
+                            _queue_bash_stream("stdout", chunk)
+
+                        def _on_bash_stderr(chunk: str) -> None:
+                            _queue_bash_stream("stderr", chunk)
+
+                        try:
+                            shell_result = await asyncio.to_thread(
+                                self.repl_runtime.execute_bash,
+                                command=command,
+                                timeout_s=timeout_s,
+                                cwd=cwd,
+                                on_stdout_chunk=_on_bash_stdout,
+                                on_stderr_chunk=_on_bash_stderr,
+                            )
+                            summary = "Bash command completed successfully."
+                            if shell_result.returncode != 0:
+                                summary = f"Bash command exited with code {shell_result.returncode}."
+                            tool_result = {
+                                "status": "success",
+                                "output": {
+                                    "summary": summary,
+                                    "command": shell_result.command,
+                                    "returncode": shell_result.returncode,
+                                    "stdout": shell_result.stdout,
+                                    "stderr": shell_result.stderr,
+                                    "truncated": shell_result.truncated,
+                                },
+                            }
+                        except Exception as exc:
+                            message = f"{type(exc).__name__}: {exc}"
+                            code = "SHELL_RUNTIME_ERROR"
+                            retryable = True
+                            if isinstance(exc, ValueError) and "Blocked command prefix" in str(exc):
+                                code = "SHELL_POLICY_ERROR"
+                                retryable = False
+                                message = (
+                                    f"{type(exc).__name__}: {exc}. "
+                                    "Use science wrappers (e.g., pubmed_search/pubmed_fetch) "
+                                    "instead of curl/wget for retrieval."
+                                )
+                            tool_result = {
+                                "status": "error",
+                                "error": {
+                                    "code": code,
+                                    "message": message,
+                                    "retryable": retryable,
+                                    "details": {
+                                        "command": command,
+                                        "cwd": cwd,
+                                    },
+                                },
+                            }
+                        finally:
+                            bash_queue.put_nowait(bash_sentinel)
+                            await bash_pump_task
+                else:
+                    tool_result = {
+                        "status": "error",
+                        "error": {
+                            "code": "UNSUPPORTED_TOOL",
+                            "message": f"Unsupported tool '{tc.name}'. Supported tools: repl_exec, bash_exec.",
+                            "retryable": False,
+                            "details": {"tool_name": tc.name},
+                        },
+                    }
                 finished_at = _utc_iso()
 
-                await emit(
-                    {
-                        "type": "main_agent_tool_result",
-                        "thread_id": thread_id,
-                        "run_id": run_id,
-                        "segment_index": tool_segment,
-                        "tool_use_id": tc.id,
-                        "result": tool_result,
-                    }
-                )
+                nested_segment_by_call_id: dict[str, int] = {}
+                nested_started_at: dict[str, str] = {}
+                nested_payload_by_call_id: dict[str, dict[str, Any]] = {}
+                for nested in nested_events:
+                    kind = str(nested.get("kind") or "")
+                    nested_call_id = str(nested.get("call_id") or "")
+                    nested_tool_name = str(nested.get("tool_name") or "tool")
+                    if not nested_call_id:
+                        continue
+                    if kind == "start":
+                        nested_segment = _next_segment()
+                        nested_segment_by_call_id[nested_call_id] = nested_segment
+                        nested_payload = nested.get("payload") if isinstance(nested.get("payload"), dict) else {}
+                        await self.store.record_tool_call(
+                            thread_id=thread_id,
+                            tool_call_id=nested_call_id,
+                            tool_name=nested_tool_name,
+                            input_payload=nested_payload,
+                            visible_to_model=False,
+                        )
+                        nested_started_at[nested_call_id] = str(nested.get("started_at") or _utc_iso())
+                        nested_payload_by_call_id[nested_call_id] = nested_payload
+                        collected_blocks.append(
+                            {
+                                "type": "tool_use",
+                                "id": nested_call_id,
+                                "name": nested_tool_name,
+                                "input": nested_payload,
+                                "segment_index": nested_segment,
+                                "parent_tool_use_id": tc.id,
+                                "ui_visible": False,
+                            }
+                        )
+                        continue
+
+                    if kind == "result":
+                        nested_segment = nested_segment_by_call_id.get(nested_call_id, _next_segment())
+                        nested_segment_by_call_id[nested_call_id] = nested_segment
+                        nested_result = nested.get("result") if isinstance(nested.get("result"), dict) else {}
+                        await self.store.record_tool_result(
+                            thread_id=thread_id,
+                            tool_call_id=nested_call_id,
+                            tool_name=nested_tool_name,
+                            status=str(nested_result.get("status") or "unknown"),
+                            output=nested_result.get("output") if isinstance(nested_result.get("output"), dict) else None,
+                            error=nested_result.get("error") if isinstance(nested_result.get("error"), dict) else None,
+                            visible_to_model=False,
+                        )
+                        tool_call_index += 1
+                        write_tool_io_file(
+                            thread_id=thread_id,
+                            tool_name=nested_tool_name,
+                            tool_call_index=tool_call_index,
+                            tool_use_id=nested_call_id,
+                            user_index=user_msg_index,
+                            request_index=request_index,
+                            run_id=run_id,
+                            arguments=nested_payload_by_call_id.get(nested_call_id, {}),
+                            result=nested_result,
+                            status=str(nested_result.get("status") or "unknown"),
+                            error=(nested_result.get("error") or {}).get("message")
+                            if isinstance(nested_result.get("error"), dict)
+                            else None,
+                            started_at=nested_started_at.get(nested_call_id),
+                            finished_at=str(nested.get("finished_at") or _utc_iso()),
+                        )
+                        collected_blocks.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": nested_call_id,
+                                "name": nested_tool_name,
+                                "content": nested_result,
+                                "segment_index": nested_segment,
+                                "parent_tool_use_id": tc.id,
+                                "ui_visible": False,
+                            }
+                        )
+
+                if show_generic_tool_card:
+                    await emit(
+                        {
+                            "type": "main_agent_tool_result",
+                            "thread_id": thread_id,
+                            "run_id": run_id,
+                            "segment_index": tool_segment,
+                            "tool_use_id": tc.id,
+                            "tool_name": tc.name,
+                            "result": tool_result,
+                            "ui_visible": True,
+                        }
+                    )
 
                 await self.store.record_tool_result(
                     thread_id=thread_id,
@@ -555,8 +1113,10 @@ class AgentCore:
                     {
                         "type": "tool_result",
                         "tool_use_id": tc.id,
+                        "name": tc.name,
                         "content": tool_result,
                         "segment_index": tool_segment,
+                        "ui_visible": tool_ui_visible,
                     }
                 )
 

@@ -111,7 +111,13 @@ def builtin_tool_specs() -> list[ToolSpec]:
     return [
         ToolSpec(
             name="calc",
-            description="Evaluate a basic arithmetic expression.",
+            description=(
+                "WHEN: Evaluate a basic arithmetic expression for deterministic local computation.\n"
+                "AVOID: Passing non-arithmetic or unsafe code-like expressions.\n"
+                "CRITICAL_ARGS: expression.\n"
+                "RETURNS: numeric evaluation result.\n"
+                "FAILS_IF: expression is missing or unsupported."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
@@ -124,7 +130,13 @@ def builtin_tool_specs() -> list[ToolSpec]:
         ),
         ToolSpec(
             name="web_search_mock",
-            description="Return deterministic mock web search results for demos.",
+            description=(
+                "WHEN: Return deterministic demo search output in offline/test contexts.\n"
+                "AVOID: Using as real web evidence.\n"
+                "CRITICAL_ARGS: query.\n"
+                "RETURNS: mock result list payload.\n"
+                "FAILS_IF: query is missing."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
@@ -135,7 +147,13 @@ def builtin_tool_specs() -> list[ToolSpec]:
         ),
         ToolSpec(
             name="fetch_paper_stub",
-            description="Return mock life-science paper metadata for a topic.",
+            description=(
+                "WHEN: Provide deterministic placeholder paper metadata for demos/tests.\n"
+                "AVOID: Treating output as real publications.\n"
+                "CRITICAL_ARGS: topic.\n"
+                "RETURNS: mock paper metadata list.\n"
+                "FAILS_IF: topic is missing."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {"topic": {"type": "string"}},

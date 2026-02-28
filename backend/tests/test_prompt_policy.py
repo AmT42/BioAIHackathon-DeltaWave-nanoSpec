@@ -13,6 +13,9 @@ def test_master_prompt_contains_required_policy_sections() -> None:
         "Source trust hierarchy:",
         "Fallback behavior:",
         "Output discipline:",
+        "REPL vs Bash decision guide:",
+        "Use `bash_exec` for codebase navigation/inspection",
+        "Use `repl_exec` for tool-wrapper orchestration",
     ]
     for frag in required_fragments:
         assert frag in text

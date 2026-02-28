@@ -33,6 +33,7 @@ def _coerce_result_kind(value: Any) -> str:
         return candidate
     return "record_list"
 
+
 def make_tool_output(
     *,
     source: str,
@@ -47,6 +48,7 @@ def make_tool_output(
     auth_required: bool = False,
     auth_configured: bool = True,
     request_id: str | None = None,
+    data_schema_version: str = "v1",
     ctx: ToolContext | None = None,
 ) -> dict[str, Any]:
     return {
@@ -67,6 +69,7 @@ def make_tool_output(
             "source": source,
             "request_id": request_id,
             "retrieved_at": utc_iso(),
+            "data_schema_version": data_schema_version,
             "auth": {
                 "required": bool(auth_required),
                 "configured": bool(auth_configured),
@@ -114,6 +117,7 @@ def normalize_tool_output(
         source_meta.setdefault("source", source)
         source_meta.setdefault("request_id", None)
         source_meta.setdefault("retrieved_at", utc_iso())
+        source_meta.setdefault("data_schema_version", "v1")
         auth = source_meta.get("auth")
         if not isinstance(auth, dict):
             auth = {}
@@ -146,5 +150,8 @@ def normalize_tool_output(
         if isinstance(output.get("source_meta"), dict)
         else True,
         request_id=(output.get("source_meta") or {}).get("request_id") if isinstance(output.get("source_meta"), dict) else None,
+        data_schema_version=(output.get("source_meta") or {}).get("data_schema_version", "v1")
+        if isinstance(output.get("source_meta"), dict)
+        else "v1",
         ctx=ctx,
     )

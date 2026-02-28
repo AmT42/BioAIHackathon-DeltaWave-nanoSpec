@@ -1,81 +1,64 @@
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
+from app.agent.evidence.models import EvidenceGrade, EvidenceLedger
 
-def build_gap_map(*, ledger: dict[str, Any], claim_context: dict[str, Any] | None = None, score: dict[str, Any] | None = None) -> dict[str, Any]:
-    records = [item for item in (ledger.get("records") or []) if isinstance(item, dict)]
 
-    levels_present = {int(item.get("evidence_level")) for item in records if item.get("evidence_level") is not None}
-    missing_levels = [level for level in [1, 2, 3, 4, 5, 6] if level not in levels_present]
+def build_gap_map(ledger: EvidenceLedger, grade: EvidenceGrade | None = None) -> dict[str, Any]:
+    level_counts: Counter[int] = Counter()
+    endpoint_counts: Counter[str] = Counter()
 
-    human_records = [item for item in records if int(item.get("evidence_level") or 0) in {1, 2, 3}]
-    hard_endpoint_human = [
-        item
-        for item in human_records
-        if str(item.get("endpoint_class") or "") in {"clinical_hard", "clinical_intermediate"}
-    ]
+    for record in ledger.records:
+        if record.evidence_level is not None:
+            level_counts[int(record.evidence_level)] += 1
+        endpoint_counts[str(record.endpoint_class or "unknown")] += 1
 
-    mismatch_flags: list[str] = []
-    for record in records:
-        metadata = record.get("metadata") or {}
-        severity = str(metadata.get("mismatch_severity") or "").strip().lower()
-        if severity:
-            mismatch_flags.append(severity)
+    missing_levels: list[str] = []
+    if level_counts.get(1, 0) == 0:
+        missing_levels.append("No systematic review or meta-analysis evidence (Level 1).")
+    if level_counts.get(2, 0) == 0:
+        missing_levels.append("No randomized trial evidence (Level 2).")
+    if (level_counts.get(1, 0) + level_counts.get(2, 0) + level_counts.get(3, 0)) == 0:
+        missing_levels.append("No human evidence (Levels 1-3).")
 
-    missing: list[str] = []
-    if 1 in missing_levels:
-        missing.append("No systematic review/meta-analysis evidence in scope.")
-    if 2 in missing_levels:
-        missing.append("No randomized/interventional human trial evidence in scope.")
-    if not hard_endpoint_human:
-        missing.append("Human evidence lacks hard/intermediate clinical endpoints.")
-    if mismatch_flags:
-        missing.append("Registry-publication mismatch signals detected.")
+    missing_endpoints: list[str] = []
+    if endpoint_counts.get("clinical_hard", 0) == 0:
+        missing_endpoints.append("No hard clinical endpoints identified.")
+    if endpoint_counts.get("surrogate_biomarker", 0) > 0 and endpoint_counts.get("clinical_hard", 0) == 0:
+        missing_endpoints.append("Evidence is surrogate-heavy; direct healthspan outcomes are missing.")
 
-    what_changes: list[str] = []
-    if 2 in missing_levels:
-        what_changes.append(
-            "A preregistered interventional trial in the target population with >=12 months follow-up and functional endpoints."
-        )
-    if not hard_endpoint_human:
-        what_changes.append(
-            "At least one replicated human study with clinical outcomes (frailty/function/morbidity), not biomarker-only endpoints."
-        )
-    if 1 in missing_levels:
-        what_changes.append(
-            "A high-quality systematic review/meta-analysis synthesizing the intervention evidence in comparable populations."
-        )
-
-    claim = claim_context or {}
-    outcome = str(claim.get("outcome") or "").strip()
-    population = str(claim.get("population") or "").strip()
-
-    next_best_studies = [
-        {
-            "name": "Definitive human RCT",
-            "design": "Interventional randomized controlled trial",
-            "population": population or "target older adult population",
-            "outcome": outcome or "healthspan-oriented clinical endpoints",
-            "minimum_specs": ["n>=200", "follow-up>=12 months", "pre-registered outcomes", "adverse events reporting"],
-        }
-    ]
-
-    if score and float(score.get("final_confidence") or 0.0) < 50.0:
+    next_best_studies: list[str] = []
+    if level_counts.get(2, 0) == 0:
         next_best_studies.append(
-            {
-                "name": "Independent replication cohort",
-                "design": "Prospective independent cohort/RCT replication",
-                "population": population or "similar target population",
-                "outcome": outcome or "same clinical endpoint set",
-                "minimum_specs": ["independent site", "comparable intervention protocol", "transparent data release"],
-            }
+            "Run a preregistered randomized trial in older adults with functional outcomes (frailty, hospitalization, mobility)."
         )
+    if endpoint_counts.get("clinical_hard", 0) == 0:
+        next_best_studies.append(
+            "Add hard endpoint follow-up (e.g., morbidity, hospitalization, or validated functional decline endpoints)."
+        )
+
+    mismatch_flags: Counter[str] = Counter()
+    for row in ledger.optional_source_status:
+        flag = str((row or {}).get("flag") or "")
+        if flag:
+            mismatch_flags[flag] += 1
+
+    cautions: list[str] = []
+    if mismatch_flags.get("completed_but_unpublished_possible", 0) > 0 or mismatch_flags.get("possible_unpublished_completed_trial", 0) > 0:
+        cautions.append("Completed trials without linked publications detected.")
+    if mismatch_flags.get("registry_results_without_publication", 0) > 0:
+        cautions.append("Registry-posted results without peer-reviewed publication detected.")
+
+    if grade and grade.label in {"D", "E"} and not next_best_studies:
+        next_best_studies.append("Increase human evidence depth before making efficacy claims.")
 
     return {
-        "missing_evidence": missing,
         "missing_levels": missing_levels,
-        "mismatch_signals": mismatch_flags,
-        "what_would_change_score": what_changes,
+        "missing_endpoints": missing_endpoints,
         "next_best_studies": next_best_studies,
+        "mismatch_cautions": cautions,
+        "level_counts": {str(k): int(v) for k, v in sorted(level_counts.items())},
+        "endpoint_counts": dict(endpoint_counts),
     }
