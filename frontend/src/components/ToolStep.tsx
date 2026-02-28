@@ -75,34 +75,64 @@ function fencedCode(language: string, code: string): string {
   return `\`\`\`${language}\n${safe}\n\`\`\``;
 }
 
-function summarizeEnvSnapshot(raw: unknown): string {
+type EnvItem = {
+  name: string;
+  type: string;
+  preview: string;
+  redacted?: boolean;
+};
+
+type EnvSnapshotView = {
+  afterCount: number;
+  truncated: boolean;
+  items: EnvItem[];
+  addedCount: number;
+  updatedCount: number;
+  removedCount: number;
+  addedNames: string[];
+  updatedNames: string[];
+  removedNames: string[];
+};
+
+function parseEnvItems(value: unknown): EnvItem[] {
+  if (!Array.isArray(value)) return [];
+  const out: EnvItem[] = [];
+  for (const row of value) {
+    const item = asRecord(row);
+    if (!item) continue;
+    const name = typeof item.name === "string" ? item.name : "";
+    if (!name) continue;
+    out.push({
+      name,
+      type: typeof item.type === "string" ? item.type : "unknown",
+      preview: typeof item.preview === "string" ? item.preview : "",
+      redacted: item.redacted === true,
+    });
+  }
+  return out;
+}
+
+function parseEnvSnapshot(raw: unknown): EnvSnapshotView | null {
   const env = asRecord(raw);
-  if (!env) return "";
+  if (!env) return null;
   const after = asRecord(env.after);
   const delta = asRecord(env.delta);
-  const afterItems = Array.isArray(after?.items) ? after.items : [];
-  const lines: string[] = [];
+  const items = parseEnvItems(after?.items);
+  const addedItems = parseEnvItems(delta?.added);
+  const updatedItems = parseEnvItems(delta?.updated);
+  const removedItems = parseEnvItems(delta?.removed);
 
-  lines.push(`after_count=${typeof after?.count === "number" ? after.count : afterItems.length}`);
-  for (const item of afterItems.slice(0, 20)) {
-    const row = asRecord(item);
-    if (!row) continue;
-    const name = typeof row.name === "string" ? row.name : "var";
-    const type = typeof row.type === "string" ? row.type : "unknown";
-    const preview = typeof row.preview === "string" ? row.preview : "";
-    lines.push(`${name} (${type}) = ${preview}`);
-  }
-  if (afterItems.length > 20) lines.push(`... +${afterItems.length - 20} more`);
-
-  if (delta) {
-    const added = typeof delta.added_count === "number" ? delta.added_count : 0;
-    const updated = typeof delta.updated_count === "number" ? delta.updated_count : 0;
-    const removed = typeof delta.removed_count === "number" ? delta.removed_count : 0;
-    lines.push("");
-    lines.push(`delta: +${added} ~${updated} -${removed}`);
-  }
-
-  return lines.join("\n");
+  return {
+    afterCount: typeof after?.count === "number" ? after.count : items.length,
+    truncated: after?.truncated === true,
+    items: items.slice(0, 30),
+    addedCount: typeof delta?.added_count === "number" ? delta.added_count : addedItems.length,
+    updatedCount: typeof delta?.updated_count === "number" ? delta.updated_count : updatedItems.length,
+    removedCount: typeof delta?.removed_count === "number" ? delta.removed_count : removedItems.length,
+    addedNames: addedItems.slice(0, 10).map((item) => item.name),
+    updatedNames: updatedItems.slice(0, 10).map((item) => item.name),
+    removedNames: removedItems.slice(0, 10).map((item) => item.name),
+  };
 }
 
 export function ToolStep({ step }: ToolStepProps) {
@@ -124,7 +154,7 @@ export function ToolStep({ step }: ToolStepProps) {
       : typeof step.result?.status === "string"
         ? step.result.status
         : null;
-  const envSummary = summarizeEnvSnapshot(step.replEnv ?? output?.env);
+  const envSnapshot = parseEnvSnapshot(step.replEnv ?? output?.env);
 
   if (useStructuredMode) {
     const shellCommand = step.command ?? (typeof output?.command === "string" ? output.command : "");
@@ -173,10 +203,48 @@ export function ToolStep({ step }: ToolStepProps) {
           </div>
         )}
 
-        {isRepl && envSummary && (
+        {isRepl && envSnapshot && (
           <div className="tool-step__section">
             <div className="tool-step__section-title">Environment</div>
-            <MarkdownRenderer content={fencedCode("text", envSummary)} streaming={isStreaming} />
+            <div className="tool-step__env-meta">
+              after: {envSnapshot.afterCount} vars {envSnapshot.truncated ? "(truncated)" : ""} | delta: +
+              {envSnapshot.addedCount} ~{envSnapshot.updatedCount} -{envSnapshot.removedCount}
+            </div>
+            {envSnapshot.items.length > 0 && (
+              <div className="tool-step__env-table-wrap">
+                <table className="tool-step__env-table">
+                  <thead>
+                    <tr>
+                      <th>name</th>
+                      <th>type</th>
+                      <th>preview</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {envSnapshot.items.map((item) => (
+                      <tr key={item.name}>
+                        <td>{item.name}</td>
+                        <td>{item.type}</td>
+                        <td>{item.redacted ? "[REDACTED]" : item.preview}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {(envSnapshot.addedNames.length > 0 || envSnapshot.updatedNames.length > 0 || envSnapshot.removedNames.length > 0) && (
+              <div className="tool-step__env-delta">
+                {envSnapshot.addedNames.length > 0 && (
+                  <div>added: {envSnapshot.addedNames.join(", ")}</div>
+                )}
+                {envSnapshot.updatedNames.length > 0 && (
+                  <div>updated: {envSnapshot.updatedNames.join(", ")}</div>
+                )}
+                {envSnapshot.removedNames.length > 0 && (
+                  <div>removed: {envSnapshot.removedNames.join(", ")}</div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

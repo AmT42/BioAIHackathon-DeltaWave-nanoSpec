@@ -658,6 +658,51 @@ body {
   font-size: 0.83rem;
 }
 
+.tool-step__env-meta {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: #a8b7c9;
+  margin-bottom: 6px;
+}
+
+.tool-step__env-table-wrap {
+  overflow-x: auto;
+  border: 1px solid rgba(120, 141, 168, 0.24);
+  border-radius: 6px;
+}
+
+.tool-step__env-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.tool-step__env-table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: #9fb1c8;
+  background: rgba(95, 119, 151, 0.12);
+  border-bottom: 1px solid rgba(120, 141, 168, 0.24);
+}
+
+.tool-step__env-table td {
+  padding: 6px 8px;
+  color: #c0ccdc;
+  border-top: 1px solid rgba(120, 141, 168, 0.16);
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.tool-step__env-delta {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: #8fa3ba;
+  display: grid;
+  gap: 2px;
+}
+
 .tool-step__result-toggle {
   display: flex;
   align-items: center;
