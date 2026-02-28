@@ -365,7 +365,7 @@ def test_repl_caps_long_printed_line_and_writes_artifact(tmp_path: Path) -> None
 
     assert out.error is None
     assert out.had_visible_output is True
-    assert "stdout line capped at 120 chars" in out.stdout
+    assert "stdout capped at 120 chars" in out.stdout
     assert out.stdout_capping is not None
     assert out.stdout_capping.get("lines_capped") == 1
     assert out.artifacts
@@ -373,15 +373,61 @@ def test_repl_caps_long_printed_line_and_writes_artifact(tmp_path: Path) -> None
     display_path = str(out.artifacts[0].get("display_path") or "")
     assert artifact_path.exists()
     assert "repl_stdout" in str(artifact_path)
+    assert "turn-m0001-r0001-e0001" in str(artifact_path)
+    assert artifact_path.name.startswith("line-0001-chars-")
     assert "thread-" not in str(artifact_path)
-    assert display_path and not display_path.startswith("/")
+    assert "run-" not in str(artifact_path)
+    assert "exec-" not in str(artifact_path)
+    assert display_path
+    assert "repl_stdout" in display_path
     assert "saved to " + display_path in out.stdout
     artifact_text = artifact_path.read_text(encoding="utf-8")
     assert "REPL Stdout Full Line" in artifact_text
+    assert "thread_id:" not in artifact_text
+    assert "run_id:" not in artifact_text
+    assert "execution_id:" not in artifact_text
     assert "X" * 200 in artifact_text
     tool_payload = out.to_tool_output()["output"]
     assert isinstance(tool_payload.get("artifacts"), list) and tool_payload["artifacts"]
     assert isinstance(tool_payload.get("stdout_capping"), dict)
+
+
+def test_repl_stdout_artifact_display_path_is_workspace_relative(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_root = workspace_root / "backend" / "artifacts"
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    runtime = ReplRuntime(
+        tools=create_builtin_registry(),
+        workspace_root=workspace_root,
+        allowed_command_prefixes=("pwd", "ls", "rg", "grep", "cat", "bash"),
+        blocked_command_prefixes=("rm", "curl", "wget"),
+        max_stdout_bytes=8192,
+        max_wall_time_seconds=30,
+        max_tool_calls_per_exec=50,
+        session_manager=ReplSessionManager(max_sessions=10, session_ttl_seconds=3600),
+        artifact_root=artifact_root,
+        stdout_soft_line_limit=100,
+        stdout_max_line_artifacts=3,
+    )
+
+    out = runtime.execute(
+        thread_id="thread-cap",
+        run_id="run-cap",
+        request_index=2,
+        user_msg_index=3,
+        execution_id="repl-cap-2",
+        code="print('Y' * 300)",
+    )
+
+    assert out.error is None
+    assert out.artifacts
+    display_path = str(out.artifacts[0].get("display_path") or "")
+    assert display_path.startswith("backend/artifacts/repl_stdout/")
+    assert "turn-m0003-r0002-e0001" in display_path
+    assert "thread-" not in display_path
+    assert "run-" not in display_path
+    assert "exec-" not in display_path
+    assert "saved to " + display_path in out.stdout
 
 
 def test_repl_supports_dir_and_safe_json_import() -> None:

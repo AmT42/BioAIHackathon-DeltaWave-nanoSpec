@@ -287,6 +287,7 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             matches.append(
                 {
                     "compound": compound_name,
+                    "compound_name": compound_name,
                     "species": species,
                     "strain": _find_value(row, ["strain", "background"]),
                     "sex": _find_value(row, ["sex", "gender"]),
@@ -306,6 +307,31 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
                             "max_lifespan_change_percent",
                             "max lifespan change (%)",
                             "maximum lifespan change (%)",
+                        ],
+                    ),
+                    "avg_lifespan_change_percent": _find_value(
+                        row,
+                        [
+                            "avg_lifespan_change_percent",
+                            "average lifespan change (%)",
+                            "avg lifespan change (%)",
+                            "median lifespan change (%)",
+                        ],
+                    ),
+                    "max_lifespan_change_percent": _find_value(
+                        row,
+                        [
+                            "max_lifespan_change_percent",
+                            "max lifespan change (%)",
+                            "maximum lifespan change (%)",
+                        ],
+                    ),
+                    "significance": _find_value(
+                        row,
+                        [
+                            "avg_lifespan_significance",
+                            "max_lifespan_significance",
+                            "significance",
                         ],
                     ),
                     "reference": _find_value(row, ["pubmed_id", "pmid", "reference", "citation"]),

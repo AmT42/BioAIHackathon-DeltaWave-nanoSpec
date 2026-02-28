@@ -1293,14 +1293,23 @@ class ReplRuntime:
         if self.artifact_root is None:
             return None
         day = datetime.now(timezone.utc).strftime("%Y%m%d")
-        return self.artifact_root / "repl_stdout" / day / f"m{user_msg_index:04d}_r{request_index:04d}_e{exec_seq:04d}"
+        turn_dir = f"turn-m{user_msg_index:04d}-r{request_index:04d}-e{exec_seq:04d}"
+        return self.artifact_root / "repl_stdout" / day / turn_dir
 
     def _display_artifact_path(self, path: Path) -> str:
+        # Prefer workspace-relative paths because bash_exec runs from workspace root.
         try:
             rel = path.resolve().relative_to(self.workspace_root)
             return str(rel)
         except Exception:
-            return str(path)
+            pass
+        if self.artifact_root is not None:
+            try:
+                rel_to_artifacts = path.resolve().relative_to(self.artifact_root.resolve())
+                return str(rel_to_artifacts)
+            except Exception:
+                pass
+        return str(path)
 
     def _write_long_stdout_artifact(
         self,
@@ -1308,9 +1317,6 @@ class ReplRuntime:
         user_msg_index: int,
         request_index: int,
         exec_seq: int,
-        thread_id: str,
-        run_id: str,
-        execution_id: str,
         line_number: int,
         line_text: str,
     ) -> dict[str, Any] | None:
@@ -1321,16 +1327,13 @@ class ReplRuntime:
         )
         if base is None:
             return None
-        file_name = f"stdout_line_{line_number:04d}_chars{len(line_text)}.md"
+        file_name = f"line-{line_number:04d}-chars-{len(line_text)}.md"
         path = base / file_name
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(
                 (
                     "# REPL Stdout Full Line\n\n"
-                    f"- thread_id: `{thread_id}`\n"
-                    f"- run_id: `{run_id}`\n"
-                    f"- execution_id: `{execution_id}`\n"
                     f"- line_number: `{line_number}`\n"
                     f"- chars: `{len(line_text)}`\n\n"
                     "```text\n"
@@ -1363,9 +1366,6 @@ class ReplRuntime:
         user_msg_index: int,
         request_index: int,
         exec_seq: int,
-        thread_id: str,
-        run_id: str,
-        execution_id: str,
     ) -> tuple[str, list[dict[str, Any]], int]:
         if not text:
             return text, [], 0
@@ -1392,9 +1392,6 @@ class ReplRuntime:
                     user_msg_index=user_msg_index,
                     request_index=request_index,
                     exec_seq=exec_seq,
-                    thread_id=thread_id,
-                    run_id=run_id,
-                    execution_id=execution_id,
                     line_number=line_idx,
                     line_text=body,
                 )
@@ -1404,7 +1401,7 @@ class ReplRuntime:
             if artifact_entry is not None:
                 display_path = str(artifact_entry.get("display_path") or artifact_entry.get("path"))
                 note = (
-                    f"[stdout line capped at {self.stdout_soft_line_limit} chars; full line ({len(body)} chars) "
+                    f"[stdout capped at {self.stdout_soft_line_limit} chars; full line ({len(body)} chars) "
                     f"saved to {display_path}; inspect with {artifact_entry['inspect_sed']} "
                     f"or {artifact_entry['inspect_rg']}]"
                 )
@@ -1500,9 +1497,6 @@ class ReplRuntime:
                 user_msg_index=user_msg_index,
                 request_index=request_index,
                 exec_seq=exec_seq,
-                thread_id=thread_id,
-                run_id=run_id,
-                execution_id=execution_id,
             )
             if capped_lines:
                 stdout_capping = {
