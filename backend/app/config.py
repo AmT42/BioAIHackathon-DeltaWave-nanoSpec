@@ -43,10 +43,16 @@ class Settings:
     pubmed_api_key: str | None
     semanticscholar_api_key: str | None
     epistemonikos_api_key: str | None
+    paperqa_model: str
+    paperqa_sub_agent_model: str
+    paperqa_workflow_model: str
+    paperqa_pipeline_model: str
+    paperqa_timeout_seconds: int
     enable_normalization_tools: bool
     enable_literature_tools: bool
     enable_pubmed_tools: bool
     enable_openalex_tools: bool
+    enable_paperqa_tools: bool
     enable_trial_tools: bool
     enable_safety_tools: bool
     enable_longevity_tools: bool
@@ -163,6 +169,7 @@ def get_settings() -> Settings:
     enable_literature_tools = _env_bool("ENABLE_LITERATURE_TOOLS", default=True)
     enable_pubmed_tools = _env_bool("ENABLE_PUBMED_TOOLS", default=enable_literature_tools)
     enable_openalex_tools = _env_bool("ENABLE_OPENALEX_TOOLS", default=enable_literature_tools)
+    enable_paperqa_tools = _env_bool("ENABLE_PAPERQA_TOOLS", default=True)
     workspace_root = Path(os.getenv("REPL_WORKSPACE_ROOT", str(backend_root.parent))).expanduser().resolve()
     allowed_prefixes = _env_csv(
         "REPL_ALLOWED_COMMAND_PREFIXES",
@@ -185,6 +192,12 @@ def get_settings() -> Settings:
     )
     repl_preload_packages = _env_csv("REPL_PRELOAD_PACKAGES", "")
 
+    paperqa_model = os.getenv("PAPERQA_MODEL", os.getenv("GEMINI_MODEL", "gemini/gemini-3-flash"))
+    paperqa_sub_agent_model = os.getenv("PAPERQA_SUB_AGENT_MODEL", paperqa_model)
+    paperqa_workflow_model = os.getenv("PAPERQA_WORKFLOW_MODEL", paperqa_model)
+    paperqa_pipeline_model = os.getenv("PAPERQA_PIPELINE_MODEL", paperqa_workflow_model)
+    paperqa_timeout_seconds = int(_env_int("PAPERQA_TIMEOUT_SECONDS", default=1500) or 1500)
+
     return Settings(
         database_url=os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./chat.db"),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
@@ -204,14 +217,20 @@ def get_settings() -> Settings:
         tool_http_max_retries=_env_int("TOOL_HTTP_MAX_RETRIES", default=2),
         tool_http_user_agent=os.getenv("TOOL_HTTP_USER_AGENT", "hackathon-agent-core/0.1"),
         openalex_api_key=os.getenv("OPENALEX_API_KEY"),
-        openalex_mailto=os.getenv("OPENALEX_MAILTO"),
+        openalex_mailto=os.getenv("OPENALEX_MAILTO", "ahmet@deltawave.fr"),
         pubmed_api_key=os.getenv("PUBMED_API_KEY"),
         semanticscholar_api_key=os.getenv("SEMANTICSCHOLAR_API_KEY"),
         epistemonikos_api_key=os.getenv("EPISTEMONIKOS_API_KEY"),
+        paperqa_model=paperqa_model,
+        paperqa_sub_agent_model=paperqa_sub_agent_model,
+        paperqa_workflow_model=paperqa_workflow_model,
+        paperqa_pipeline_model=paperqa_pipeline_model,
+        paperqa_timeout_seconds=paperqa_timeout_seconds,
         enable_normalization_tools=_env_bool("ENABLE_NORMALIZATION_TOOLS", default=True),
         enable_literature_tools=enable_literature_tools,
         enable_pubmed_tools=enable_pubmed_tools,
         enable_openalex_tools=enable_openalex_tools,
+        enable_paperqa_tools=enable_paperqa_tools,
         enable_trial_tools=_env_bool("ENABLE_TRIAL_TOOLS", default=True),
         enable_safety_tools=_env_bool("ENABLE_SAFETY_TOOLS", default=True),
         enable_longevity_tools=_env_bool("ENABLE_LONGEVITY_TOOLS", default=True),
@@ -219,7 +238,7 @@ def get_settings() -> Settings:
         enable_builtin_demo_tools=_env_bool("ENABLE_BUILTIN_DEMO_TOOLS", default=False),
         agent_execution_mode=_normalize_agent_execution_mode(os.getenv("AGENT_EXECUTION_MODE", "repl_only")),
         repl_workspace_root=workspace_root,
-        repl_max_wall_time_seconds=int(_env_int("REPL_MAX_WALL_TIME_SECONDS", default=120) or 120),
+        repl_max_wall_time_seconds=int(_env_int("REPL_MAX_WALL_TIME_SECONDS", default=1500) or 1500),
         repl_max_stdout_bytes=int(_env_int("REPL_MAX_STDOUT_BYTES", default=65536) or 65536),
         repl_max_tool_calls_per_exec=int(_env_int("REPL_MAX_TOOL_CALLS_PER_EXEC", default=200) or 200),
         repl_session_ttl_seconds=int(_env_int("REPL_SESSION_TTL_SECONDS", default=86_400) or 86_400),

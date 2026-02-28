@@ -12,6 +12,7 @@ from app.agent.tools.sources.longevity import build_longevity_tools
 from app.agent.tools.sources.normalization import build_normalization_tools
 from app.agent.tools.sources.optional_sources import build_optional_source_tools
 from app.agent.tools.sources.evidence_tools import build_evidence_tools
+from app.agent.tools.sources.paperqa_literature import build_paperqa_literature_tools
 from app.agent.tools.sources.safety import build_safety_tools
 from app.agent.tools.sources.trials import build_trial_tools
 
@@ -41,6 +42,8 @@ def create_science_registry(settings: Settings) -> ToolRegistry:
                 "OpenAlex tools enabled but neither OPENALEX_API_KEY nor OPENALEX_MAILTO is set; OpenAlex tools will be omitted."
             )
         tools.extend(build_literature_tools(settings, http))
+    if settings.enable_literature_tools and settings.enable_paperqa_tools:
+        tools.extend(build_paperqa_literature_tools(settings))
     if settings.enable_trial_tools:
         tools.extend(build_trial_tools(settings, http))
     if settings.enable_safety_tools:

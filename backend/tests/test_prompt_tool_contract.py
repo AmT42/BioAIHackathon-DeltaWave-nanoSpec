@@ -20,6 +20,8 @@ _TOOL_NAME_PREFIXES = (
     "openfda",
     "longevity",
     "evidence",
+    "literature",
+    "fetch",
     "concept",
     "build",
     "chebi",
@@ -57,4 +59,3 @@ def test_system_prompt_references_only_registered_tools() -> None:
     candidates = _prompt_tool_candidates(DEFAULT_SYSTEM_PROMPT)
     missing = sorted(name for name in candidates if name not in available)
     assert not missing, f"Prompt references unknown tools: {missing}"
-

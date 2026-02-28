@@ -589,6 +589,10 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
             ctx=ctx,
         )
 
+    def fetch_pubmed(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
+        # Alias for clearer verb-first naming in prompts.
+        return pubmed_fetch(payload, ctx)
+
     def pubmed_enrich_pmids(payload: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, Any]:
         pmids = payload.get("pmids") or payload.get("ids") or []
         if not isinstance(pmids, list) or not pmids:
@@ -905,10 +909,12 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
                 ToolSpec(
                     name="pubmed_fetch",
                     description=(
-                        "WHEN: Fetch detailed PubMed records for known PMID IDs.\n"
-                        "AVOID: Passing non-PMID identifiers.\n"
-                        "CRITICAL_ARGS: ids, include_classification_fields.\n"
-                        "RETURNS: Compact records with optional publication_types/mesh/humans/animals fields.\n"
+                        "WHEN: Use after `pubmed_search` to fetch metadata/abstracts for a chosen PMID list.\n"
+                        "AVOID: Do not use this as a synthesis step; it returns records only."
+                        " For synthesis use `literature_review_agent`/`search_pubmed_agent`.\n"
+                        "CRITICAL_ARGS: ids required; include_abstract/include_classification_fields optional.\n"
+                        "RETURNS: Compact PubMed records (title, abstract, publication types, MeSH, humans/animals flags)."
+                        " Example: `docs = pubmed_fetch(ids=pm.ids[:5], include_abstract=True)`.\n"
                         "FAILS_IF: ids is missing or empty."
                     ),
                     input_schema={
@@ -922,6 +928,28 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
                         "required": ["ids"],
                     },
                     handler=pubmed_fetch,
+                    source="pubmed",
+                ),
+                ToolSpec(
+                    name="fetch_pubmed",
+                    description=(
+                        "WHEN: Alias of `pubmed_fetch` with verb-first naming for clarity in prompts.\n"
+                        "AVOID: Same caveat as `pubmed_fetch`; this is deterministic fetch, not final synthesis.\n"
+                        "CRITICAL_ARGS: ids required.\n"
+                        "RETURNS: Same output as `pubmed_fetch`.\n"
+                        "FAILS_IF: ids is missing or empty."
+                    ),
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "ids": {"type": "array", "items": {"type": "string"}},
+                            "include_abstract": {"type": "boolean", "default": True},
+                            "include_classification_fields": {"type": "boolean", "default": True},
+                            "fields": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["ids"],
+                    },
+                    handler=fetch_pubmed,
                     source="pubmed",
                 ),
                 ToolSpec(

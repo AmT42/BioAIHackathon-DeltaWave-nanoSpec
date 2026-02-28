@@ -1,0 +1,74 @@
+name: Publish
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - id: build-paper-qa-pymupdf
+        uses: hynek/build-and-inspect-python-package@v2
+        with:
+          path: packages/paper-qa-pymupdf
+          upload-name-suffix: -paper-qa-pymupdf
+      - name: Download built paper-qa-pymupdf artifact to dist/
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ steps.build-paper-qa-pymupdf.outputs.artifact-name }}
+          path: dist
+      - name: Clean up paper-qa-pymupdf build # Work around https://github.com/hynek/build-and-inspect-python-package/issues/174
+        run: rm -r ${{ steps.build-paper-qa-pymupdf.outputs.dist }}
+      - id: build-paper-qa-pypdf
+        uses: hynek/build-and-inspect-python-package@v2
+        with:
+          path: packages/paper-qa-pypdf
+          upload-name-suffix: -paper-qa-pypdf
+      - name: Download built paper-qa-pypdf artifact to dist/
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ steps.build-paper-qa-pypdf.outputs.artifact-name }}
+          path: dist
+      - name: Clean up paper-qa-pypdf build # Work around https://github.com/hynek/build-and-inspect-python-package/issues/174
+        run: rm -r ${{ steps.build-paper-qa-pypdf.outputs.dist }}
+      - id: build-paper-qa-docling
+        uses: hynek/build-and-inspect-python-package@v2
+        with:
+          path: packages/paper-qa-docling
+          upload-name-suffix: -paper-qa-docling
+      - name: Download built paper-qa-docling artifact to dist/
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ steps.build-paper-qa-docling.outputs.artifact-name }}
+          path: dist
+      - name: Clean up paper-qa-docling build # Work around https://github.com/hynek/build-and-inspect-python-package/issues/174
+        run: rm -r ${{ steps.build-paper-qa-docling.outputs.dist }}
+      - id: build-paper-qa-nemotron
+        uses: hynek/build-and-inspect-python-package@v2
+        with:
+          path: packages/paper-qa-nemotron
+          upload-name-suffix: -paper-qa-nemotron
+      - name: Download built paper-qa-nemotron artifact to dist/
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ steps.build-paper-qa-nemotron.outputs.artifact-name }}
+          path: dist
+      - name: Clean up paper-qa-nemotron build # Work around https://github.com/hynek/build-and-inspect-python-package/issues/174
+        run: rm -r ${{ steps.build-paper-qa-nemotron.outputs.dist }}
+      - id: build-paper-qa
+        uses: hynek/build-and-inspect-python-package@v2
+        with:
+          upload-name-suffix: -paper-qa
+      - name: Download built paper-qa artifact to dist/
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ steps.build-paper-qa.outputs.artifact-name }}
+          path: dist
+      - name: Clean up paper-qa build # Work around https://github.com/hynek/build-and-inspect-python-package/issues/174
+        run: rm -r ${{ steps.build-paper-qa.outputs.dist }}
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}

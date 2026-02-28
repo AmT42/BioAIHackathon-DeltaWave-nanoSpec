@@ -10,6 +10,7 @@ dependencies = [
   "greenlet>=3.0.0",
   "aiosqlite>=0.20.0",
   "pydantic>=2.8.0",
+  "pydantic-settings>=2.0.0",
   "python-dotenv>=1.0.1",
   "anthropic>=0.42.0",
   "google-genai>=1.0.0",

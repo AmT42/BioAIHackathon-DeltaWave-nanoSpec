@@ -16,9 +16,8 @@ Minimal Gemini-first chat stack with:
 ```bash
 cd backend
 cp .env.example .env
-python -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
+# required when MOCK_LLM=false
+export GEMINI_API_KEY=your_key_here
 ```
 
 Run with log capture (recommended):
@@ -27,10 +26,14 @@ Run with log capture (recommended):
 ./scripts/eve-up.sh
 ```
 
+`eve-up.sh` now bootstraps and validates everything (venv, deps, PaperQA wiring, env checks) before starting Uvicorn.
+By default it uses `backend/.venv` as the coding/runtime environment.
+To use an external venv, set both `EVE_VENV_DIR=/abs/path/to/venv` and `EVE_ALLOW_EXTERNAL_VENV=true`.
+
 Or run directly:
 
 ```bash
-uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --port 8000
 ```
 
 ## Frontend Quick Start
@@ -93,6 +96,11 @@ Each `./backend/scripts/eve-up.sh` run creates:
 ## Notes
 
 - `MOCK_LLM=false` requires `GEMINI_API_KEY`.
+- `search_pubmed_agent` is enabled by startup bootstrap (`ENABLE_PAPERQA_TOOLS=true` is enforced at runtime).
+- PaperQA wrapper uses the vendored source at `backend/vendor/paper-qa` and benefits from `OPENALEX_API_KEY` or `OPENALEX_MAILTO`.
+- Bootstrap diagnostics are written to `backend/logs/<run_index>/bootstrap_report.json`.
+- PaperQA model routing is configurable with `PAPERQA_MODEL`, `PAPERQA_SUB_AGENT_MODEL`, `PAPERQA_WORKFLOW_MODEL`, `PAPERQA_PIPELINE_MODEL`, and `PAPERQA_TIMEOUT_SECONDS`.
+- Startup bootstrap enforces minimum timeouts of `1500` seconds for `PAPERQA_TIMEOUT_SECONDS` and `REPL_MAX_WALL_TIME_SECONDS`.
 - `GEMINI_REASONING_EFFORT` controls Gemini thinking effort (`minimal|low|medium|high|disable|none`), default `medium`.
 - `GEMINI_INCLUDE_THOUGHTS=true` enables thought-summary streaming to the frontend.
 - Optional `GEMINI_THINKING_BUDGET` overrides the per-turn thinking token budget.

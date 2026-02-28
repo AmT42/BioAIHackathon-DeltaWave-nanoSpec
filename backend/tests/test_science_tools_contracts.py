@@ -38,6 +38,7 @@ def test_science_registry_contains_core_and_evidence_tools(tmp_path: Path) -> No
     assert "normalize_expand_terms_llm" in names
     assert "pubmed_search" in names
     assert "pubmed_fetch" in names
+    assert "fetch_pubmed" in names
     assert "europmc_search" in names
     assert "europmc_fetch" in names
     assert "evidence_classify_pubmed_records" in names
@@ -46,6 +47,8 @@ def test_science_registry_contains_core_and_evidence_tools(tmp_path: Path) -> No
     assert "evidence_grade" in names
     assert "evidence_gap_map" in names
     assert "evidence_render_report" in names
+    assert "literature_review_agent" in names
+    assert "search_pubmed_agent" in names
 
 
 def test_science_registry_omits_key_gated_tools_without_keys(tmp_path: Path) -> None:
@@ -60,6 +63,20 @@ def test_science_registry_omits_key_gated_tools_without_keys(tmp_path: Path) -> 
     assert "openalex_search_works" not in names
     assert "openalex_get_works" not in names
     assert "pubmed_esearch" in names
+
+
+def test_science_registry_optionally_enables_paperqa_tool(tmp_path: Path) -> None:
+    enabled_settings = replace(_settings(tmp_path), enable_paperqa_tools=True)
+    enabled_registry = create_science_registry(enabled_settings)
+    enabled_names = {schema["function"]["name"] for schema in enabled_registry.openai_schemas()}
+    assert "literature_review_agent" in enabled_names
+    assert "search_pubmed_agent" in enabled_names
+
+    disabled_settings = replace(_settings(tmp_path), enable_paperqa_tools=False)
+    disabled_registry = create_science_registry(disabled_settings)
+    disabled_names = {schema["function"]["name"] for schema in disabled_registry.openai_schemas()}
+    assert "literature_review_agent" not in disabled_names
+    assert "search_pubmed_agent" not in disabled_names
 
 
 def test_tool_output_contract_and_error_shape(tmp_path: Path) -> None:
@@ -103,6 +120,8 @@ def test_new_tools_have_structured_description_blocks(tmp_path: Path) -> None:
     new_tools = {
         "pubmed_search",
         "pubmed_fetch",
+        "fetch_pubmed",
+        "literature_review_agent",
         "europmc_search",
         "europmc_fetch",
         "clinicaltrials_search",

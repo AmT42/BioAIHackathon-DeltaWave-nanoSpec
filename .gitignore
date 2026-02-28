@@ -5,6 +5,7 @@ __pycache__/
 *.pyd
 .venv/
 backend/.venv_local/
+backend/.venv-worktree/
 *.egg-info/
 
 # Local env

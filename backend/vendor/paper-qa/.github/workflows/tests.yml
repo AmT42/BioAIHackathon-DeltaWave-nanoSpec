@@ -1,0 +1,149 @@
+name: Lint and Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' # pre-commit-ci/lite-action only runs here
+    strategy:
+      matrix:
+        python-version: [3.11, 3.13] # Our min and max supported Python versions
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # For setuptools-scm, replace with fetch-tags after https://github.com/actions/checkout/issues/1471
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+          activate-environment: true # Activate for simple `uv sync` below
+      - run: uv sync
+      - uses: j178/prek-action@v1
+        with:
+          prek-version: 0.2.14 # Downpin for https://github.com/j178/prek/issues/1104
+      - uses: pre-commit-ci/lite-action@v1.1.0
+        if: always()
+  lint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.11] # Our min supported Python version
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-local-path: /tmp/baipp-uv_cache_dir # Work around https://github.com/hynek/build-and-inspect-python-package/issues/181
+          python-version: ${{ matrix.python-version }}
+      - name: Check paper-qa-pymupdf build
+        id: build-paper-qa-pymupdf
+        if: matrix.python-version == '3.11'
+        uses: hynek/build-and-inspect-python-package@v2
+        with:
+          path: packages/paper-qa-pymupdf
+          upload-name-suffix: -paper-qa-pymupdf
+      - name: Clean up paper-qa-pymupdf build # Work around https://github.com/hynek/build-and-inspect-python-package/issues/174
+        if: matrix.python-version == '3.11'
+        run: rm -r ${{ steps.build-paper-qa-pymupdf.outputs.dist }}
+      - name: Check paper-qa-pypdf build
+        id: build-paper-qa-pypdf
+        if: matrix.python-version == '3.11'
+        uses: hynek/build-and-inspect-python-package@v2
+        with:
+          path: packages/paper-qa-pypdf
+          upload-name-suffix: -paper-qa-pypdf
+      - name: Clean up paper-qa-pymupdf build # Work around https://github.com/hynek/build-and-inspect-python-package/issues/174
+        if: matrix.python-version == '3.11'
+        run: rm -r ${{ steps.build-paper-qa-pypdf.outputs.dist }}
+      - name: Check paper-qa-docling build
+        id: build-paper-qa-docling
+        if: matrix.python-version == '3.11'
+        uses: hynek/build-and-inspect-python-package@v2
+        with:
+          path: packages/paper-qa-docling
+          upload-name-suffix: -paper-qa-docling
+      - name: Clean up paper-qa-docling build # Work around https://github.com/hynek/build-and-inspect-python-package/issues/174
+        if: matrix.python-version == '3.11'
+        run: rm -r ${{ steps.build-paper-qa-docling.outputs.dist }}
+      - name: Check paper-qa-nemotron build
+        id: build-paper-qa-nemotron
+        if: matrix.python-version == '3.11'
+        uses: hynek/build-and-inspect-python-package@v2
+        with:
+          path: packages/paper-qa-nemotron
+          upload-name-suffix: -paper-qa-nemotron
+      - name: Clean up paper-qa-nemotron build # Work around https://github.com/hynek/build-and-inspect-python-package/issues/174
+        if: matrix.python-version == '3.11'
+        run: rm -r ${{ steps.build-paper-qa-nemotron.outputs.dist }}
+      - name: Check paper-qa build
+        id: build-paper-qa
+        if: matrix.python-version == '3.11'
+        uses: hynek/build-and-inspect-python-package@v2
+        with:
+          upload-name-suffix: -paper-qa
+      - name: Clean up paper-qa build # Work around https://github.com/hynek/build-and-inspect-python-package/issues/174
+        if: matrix.python-version == '3.11'
+        run: rm -r ${{ steps.build-paper-qa.outputs.dist }}
+      - run: uv sync
+      - run: uv run pylint src packages
+      - run: uv run refurb .
+      - uses: suzuki-shunsuke/github-action-renovate-config-validator@v1.1.1
+  test-src:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.11, 3.13] # Our min and max supported Python versions
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync
+      - run: uv run pytest -n auto tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SEMANTIC_SCHOLAR_API_KEY: ${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
+          CROSSREF_API_KEY: ${{ secrets.CROSSREF_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+  test-packages:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.12, 3.13] # Our min and max supported Python versions, skipping 3.11 to avoid https://github.com/BerriAI/litellm/issues/16518
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync
+      - name: Cache Docling models
+        id: cache-models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/docling
+          key: ${{ runner.os }}-docling-${{ hashFiles('uv.lock') }}
+          restore-keys: ${{ runner.os }}-docling-
+      - name: Pre-download Docling models # Avoid CI race conditions in filesystem on model download
+        if: steps.cache-models.outputs.cache-hit != 'true'
+        # RapidOCR is used for PDF pipeline's OCR, layout for layout analysis,
+        # tableformer for table structure
+        run: uv run docling-tools models download rapidocr layout tableformer
+      - run: uv run pytest -n auto packages
+        env:
+          DOCLING_ARTIFACTS_PATH: ~/.cache/docling/models # Work around https://github.com/docling-project/docling/issues/2500
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SEMANTIC_SCHOLAR_API_KEY: ${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
+          CROSSREF_API_KEY: ${{ secrets.CROSSREF_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}

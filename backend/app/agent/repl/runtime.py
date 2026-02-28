@@ -673,6 +673,31 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
     }
     safe_builtins = {name: getattr(builtins, name) for name in safe_builtin_names}
     safe_builtins["__import__"] = bindings.import_hook
+    available_tool_names = set(bindings.tools.names())
+    paperqa_tool_name: str | None = None
+    if "literature_review_agent" in available_tool_names:
+        paperqa_tool_name = "literature_review_agent"
+    elif "search_pubmed_agent" in available_tool_names:
+        paperqa_tool_name = "search_pubmed_agent"
+    has_paperqa = paperqa_tool_name is not None
+    paperqa_tool_name_for_examples = paperqa_tool_name or "search_pubmed_agent"
+    pubmed_fetch_tool_name = "fetch_pubmed" if "fetch_pubmed" in available_tool_names else "pubmed_fetch"
+    help_repl_example = (
+        f"  res = {paperqa_tool_name_for_examples}(query='rapamycin aging human evidence summary', mode='balanced')\n"
+        "  print(res.preview())\n"
+        "  pm = pubmed_search(query='rapamycin aging randomized trial', limit=3)\n"
+        f"  rows = {pubmed_fetch_tool_name}(ids=pm.ids[:3], include_abstract=True)\n"
+        "  print(rows.shape())\n"
+        "  for rec in rows: print(rec.get('pmid'))"
+    )
+    if not has_paperqa:
+        help_repl_example = (
+            "  res = pubmed_search(query='exercise AND alzheimer', limit=3)\n"
+            "  print(res.preview())\n"
+            f"  rows = {pubmed_fetch_tool_name}(ids=res.ids[:3], include_abstract=True)\n"
+            "  print(rows.shape())\n"
+            "  for rec in rows: print(rec.get('pmid'))"
+        )
 
     def _help_tool(tool_name: str) -> dict[str, Any]:
         spec = bindings.tools.get_spec(str(tool_name))
@@ -715,14 +740,16 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
                 "merged = normalize_merge_candidates([res], user_text='Hyperbaric oxygen therapy')",
                 "terms = retrieval_build_query_terms(concept=merged.data.get('concept'))",
                 "print(terms.preview())",
+                f"pqa = {paperqa_tool_name_for_examples}(query='rapamycin aging human evidence summary', mode='balanced')",
+                "print(pqa.preview())",
                 "pm = pubmed_search(query='\"Hyperbaric Oxygenation\" AND aging', limit=8)",
-                "docs = pubmed_fetch(ids=pm.ids.head(5), include_abstract=True)",
+                f"docs = {pubmed_fetch_tool_name}(ids=pm.ids.head(5), include_abstract=True)",
                 "print(docs.shape())",
                 "for row in docs: print(row.get('pmid'), row.get('title'))",
             ],
             "pubmed": [
                 "pm = pubmed_search(query='exercise AND alzheimer', limit=5)",
-                "docs = pubmed_fetch(ids=pm.ids.head(3), include_abstract=True)",
+                f"docs = {pubmed_fetch_tool_name}(ids=pm.ids.head(3), include_abstract=True)",
                 "print(docs.preview())",
             ],
             "trials": [
@@ -730,7 +757,19 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
                 "trials = clinicaltrials_fetch(ids=hits.ids.head(3))",
                 "print(trials.shape())",
             ],
+            "paperqa": [
+                f"pqa = {paperqa_tool_name_for_examples}(query='rapamycin longevity evidence summary', mode='balanced', min_year=2015)",
+                "print(pqa.preview())",
+                "for row in pqa.data.get('papers', [])[:5]: print(row.get('pmid'), row.get('doi'), row.get('title'))",
+            ],
         }
+        if not has_paperqa:
+            examples["longevity"] = [
+                line
+                for line in examples["longevity"]
+                if "literature_review_agent" not in line and "search_pubmed_agent" not in line and "pqa.preview" not in line
+            ]
+            examples.pop("paperqa", None)
         if normalized_topic not in examples:
             normalized_topic = "longevity"
         return {"topic": normalized_topic, "examples": examples[normalized_topic], "available_topics": sorted(examples.keys())}
@@ -786,11 +825,7 @@ def _build_base_globals(bindings: ReplBindings) -> dict[str, Any]:
             "Fetch tools usually take ids (aliases pmids/nct_ids are accepted).\n"
             "Handles expose ids.head(n), shape(), records/items/studies convenience accessors.\n"
             "Example:\n"
-            "  res = pubmed_search(query='exercise AND alzheimer', limit=3)\n"
-            "  print(res.preview())\n"
-            "  rows = pubmed_fetch(ids=res.ids[:3], include_abstract=True)\n"
-            "  print(rows.shape())\n"
-            "  for rec in rows: print(rec.get('pmid'))"
+            + help_repl_example
         ),
     }
 

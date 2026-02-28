@@ -364,19 +364,30 @@ class GeminiProvider(ProviderClient):
         }
         tool_calls: list[ToolCall] = []
         if "search" in lowered and "repl_exec" in available_tool_names:
+            if "literature_review_agent" in available_tool_names or "search_pubmed_agent" in available_tool_names:
+                paperqa_tool = (
+                    "literature_review_agent"
+                    if "literature_review_agent" in available_tool_names
+                    else "search_pubmed_agent"
+                )
+                code = (
+                    f"result = {paperqa_tool}(query={json.dumps(user_text)}, mode='balanced')\n"
+                    "print(result.preview())"
+                )
+                text = "I will run agentic literature synthesis first."
+            else:
+                code = (
+                    f"result = pubmed_search(query={json.dumps(user_text)}, mode='precision', limit=5)\n"
+                    "print(result.preview())"
+                )
+                text = "I will run a quick literature search first."
             tool_calls.append(
                 ToolCall(
                     id="mock_gemini_search_1",
                     name="repl_exec",
-                    input={
-                        "code": (
-                            f"result = pubmed_search(query={json.dumps(user_text)}, mode='precision', limit=5)\n"
-                            "print(result.preview())"
-                        )
-                    },
+                    input={"code": code},
                 )
             )
-            text = "I will run a quick literature search first."
         else:
             text = f"Gemini mock response: {user_text or 'Ready.'}"
 
