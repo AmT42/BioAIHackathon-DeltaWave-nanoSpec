@@ -16,6 +16,7 @@ export type WsEventType =
   | "main_agent_repl_env"
   | "main_agent_repl_end"
   | "main_agent_bash_command_token"
+  | "main_agent_reprompt_required"
   | "main_agent_complete"
   | "main_agent_error";
 
@@ -36,6 +37,8 @@ export type WsEvent = {
     content?: string;
     metadata?: Record<string, unknown>;
     created_at?: string;
+    runtime_dirty_files?: string[];
+    changed_files?: string[];
   };
   tool_calls?: Array<Record<string, unknown>>;
   tool_use_id?: string;

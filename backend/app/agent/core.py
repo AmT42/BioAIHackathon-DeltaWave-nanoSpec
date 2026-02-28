@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import threading
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal
 
 from app.agent.adapters import build_gemini_openai_messages
@@ -14,6 +16,7 @@ from app.agent.repl import ReplRuntime, ReplSessionManager
 from app.agent.tools.registry import ToolRegistry
 from app.agent.types import ToolCall
 from app.config import Settings
+from app.runtime_reload import schedule_process_reload
 from app.persistence.models import (
     ConversationEventKind,
     ConversationEventRole,
@@ -91,6 +94,10 @@ _BASH_TOOL_SCHEMA: dict[str, Any] = {
 _REPL_SESSION_MANAGER: ReplSessionManager | None = None
 _REPL_SESSION_MANAGER_LOCK = threading.Lock()
 _UI_VISIBLE_TOP_LEVEL_TOOLS = {"repl_exec", "bash_exec"}
+_CODE_UPDATE_REPROMPT_NOTICE = (
+    "Runtime code was updated during this turn. "
+    "Please send another prompt so the next turn runs with the updated code."
+)
 
 
 def _get_repl_session_manager(settings: Settings) -> ReplSessionManager:
@@ -129,6 +136,51 @@ def _chunk_text(value: str, chunk_size: int = 64) -> list[str]:
     return [text[i : i + size] for i in range(0, len(text), size)]
 
 
+def _normalize_rel_path(path: str) -> str:
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    return raw.replace("\\", "/").lstrip("./")
+
+
+def _git_status_files(repo_root: Path) -> set[str]:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repo_root), "status", "--porcelain", "--untracked-files=all"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return set()
+    if completed.returncode != 0:
+        return set()
+
+    files: set[str] = set()
+    for raw_line in (completed.stdout or "").splitlines():
+        line = raw_line.rstrip()
+        if len(line) < 4:
+            continue
+        payload = line[3:]
+        if "->" in payload:
+            payload = payload.split("->", 1)[1]
+        rel = _normalize_rel_path(payload)
+        if rel:
+            files.add(rel)
+    return files
+
+
+def _is_runtime_sensitive_path(path: str, prefixes: tuple[str, ...]) -> bool:
+    normalized = _normalize_rel_path(path).lower()
+    if not normalized:
+        return False
+    for prefix in prefixes:
+        normalized_prefix = _normalize_rel_path(prefix).lower().rstrip("/")
+        if normalized_prefix and (normalized == normalized_prefix or normalized.startswith(f"{normalized_prefix}/")):
+            return True
+    return False
+
+
 class AgentCore:
     def __init__(self, *, settings: Settings, store: ChatStore, tools: ToolRegistry) -> None:
         self.settings = settings
@@ -141,6 +193,7 @@ class AgentCore:
             workspace_root=settings.repl_workspace_root,
             allowed_command_prefixes=settings.repl_allowed_command_prefixes,
             blocked_command_prefixes=settings.repl_blocked_command_prefixes,
+            blocked_command_patterns=settings.repl_blocked_command_patterns,
             shell_policy_mode=settings.repl_shell_policy_mode,
             max_stdout_bytes=settings.repl_max_stdout_bytes,
             max_wall_time_seconds=settings.repl_max_wall_time_seconds,
@@ -177,6 +230,7 @@ class AgentCore:
         shell_mode = self.settings.repl_shell_policy_mode
         allowed_prefixes = ", ".join(sorted(self.settings.repl_allowed_command_prefixes))
         blocked_prefixes = ", ".join(sorted(self.settings.repl_blocked_command_prefixes))
+        blocked_patterns = ", ".join(sorted(self.settings.repl_blocked_command_patterns))
         helpers = (
             "`help_repl()`, `help_tools()`, `help_tool('name')`, "
             "`help_examples('longevity')`, `help_examples('shell_vs_repl')`, `runtime_info()`, `env_vars()`"
@@ -195,11 +249,15 @@ class AgentCore:
             f"  {helpers}\n"
             "- Result handle ergonomics:\n"
             "  `res.ids.head(n)`, `res.shape()`, `res.records`, `for rec in res: ...`\n"
+            "- Tool-specific validation reminder:\n"
+            "  - `longevity_itp_fetch_summary` requires `ids` as a non-empty list of ITP summary URLs.\n"
+            "  - if you do not have ITP URLs, skip this tool instead of calling it empty.\n"
             "- Shell policy for `bash_exec` (workspace confined):\n"
             f"  workspace root: {workspace_root}\n"
             f"  mode: {shell_mode}\n"
             f"  allowed prefixes (guarded mode): {allowed_prefixes}\n"
             f"  blocked prefixes: {blocked_prefixes}\n"
+            f"  blocked patterns: {blocked_patterns}\n"
             f"- REPL import policy: `{self.settings.repl_import_policy}`; denylist: `{', '.join(self.settings.repl_import_deny_modules)}`\n"
             f"- REPL preload mode: enabled={self.settings.repl_preload_enabled}, profile=`{self.settings.repl_preload_profile}`\n"
             f"- Execution limits: max_wall={self.settings.repl_max_wall_time_seconds}s, "
@@ -207,9 +265,17 @@ class AgentCore:
             f"max_tool_calls_per_exec={self.settings.repl_max_tool_calls_per_exec}\n"
             "- Bash examples:\n"
             "  - `bash_exec(command=\"rg -n 'normalize_merge_candidates' backend/app\")`\n"
-            "  - `bash_exec(command=\"curl -sS https://httpbin.org/get | jq .\")`\n"
+            "  - `bash_exec(command=\"curl -sS 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&retmax=3&term=metformin+aging' | jq .esearchresult.idlist\")`\n"
+            "  - `bash_exec(command=\"curl -sS 'https://clinicaltrials.gov/api/v2/studies?query.term=metformin&query.intr=metformin&pageSize=3' | jq '.studies | length'\")`\n"
+            "  - `bash_exec(command=\"wget -qO- 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=32333835' | jq '.result.uids'\")`\n"
             "- REPL examples:\n"
-            "  - `res = pubmed_search(query='exercise AND alzheimer', limit=5); print(res.preview())`\n"
+            "  - `res = normalize_ontology(query='Hyperbaric oxygen therapy', limit=5); merged = normalize_merge_candidates([res], user_text='Hyperbaric oxygen therapy')`\n"
+            "  - `terms = retrieval_build_query_terms(concept=merged.data.get('concept')); templates = retrieval_build_pubmed_templates(terms=terms.data.get('terms'))`\n"
+            "  - `queries = templates.data.get('queries', {}); pm = pubmed_search(query=queries.get('systematic_reviews', ''), limit=5); print(pm.preview())`\n"
+            "  - `itp = longevity_itp_fetch_summary(ids=['<itp_summary_url>']); print(itp.preview())`\n"
+            "- Runtime code-change handoff:\n"
+            "  - If you modify runtime code (for example under `backend/app`), end with an explicit reprompt handoff message so the user can send the next prompt on updated code.\n"
+            f"  - controlled reload enabled: {self.settings.repl_controlled_reload_enabled}\n"
             "- If uncertain about args/signatures, call `help_tool('tool_name')` first, then print previews.\n"
         )
         return DEFAULT_SYSTEM_PROMPT.rstrip() + runtime_addendum
@@ -283,6 +349,26 @@ class AgentCore:
         collected_blocks: list[dict[str, Any]] = []
         last_assistant_message_id: str | None = None
         iteration_limit_exhausted = True
+        git_tracking_enabled = bool(self.settings.repl_git_tracking_enabled)
+        status_baseline = (
+            await asyncio.to_thread(_git_status_files, self.settings.repl_workspace_root)
+            if git_tracking_enabled
+            else set()
+        )
+        changed_files: set[str] = set()
+        runtime_dirty_files: set[str] = set()
+
+        async def _capture_runtime_changes() -> None:
+            if not git_tracking_enabled:
+                return
+            current = await asyncio.to_thread(_git_status_files, self.settings.repl_workspace_root)
+            delta = {item for item in current if item not in status_baseline}
+            if not delta:
+                return
+            changed_files.update(delta)
+            for rel in delta:
+                if _is_runtime_sensitive_path(rel, self.settings.repl_runtime_sensitive_paths):
+                    runtime_dirty_files.add(rel)
 
         for _ in range(max_iterations):
             request_index += 1
@@ -1132,6 +1218,7 @@ class AgentCore:
                         "ui_visible": tool_ui_visible,
                     }
                 )
+                await _capture_runtime_changes()
 
         limit_completion_text = ""
         if iteration_limit_exhausted and not final_text.strip():
@@ -1139,6 +1226,18 @@ class AgentCore:
                 f"I stopped after reaching the tool-iteration limit ({max_iterations}) "
                 "before producing a final narrative answer. "
                 "Please continue with a narrower scope or a higher iteration budget."
+            )
+        code_updated = bool(changed_files)
+        runtime_code_updated = bool(runtime_dirty_files)
+        reprompt_required = runtime_code_updated and bool(self.settings.repl_reprompt_required_on_code_change)
+        completion_override: str | None = None
+        if limit_completion_text:
+            completion_override = limit_completion_text
+        elif reprompt_required:
+            completion_override = (
+                f"{final_text.rstrip()}\n\n{_CODE_UPDATE_REPROMPT_NOTICE}"
+                if final_text.strip()
+                else _CODE_UPDATE_REPROMPT_NOTICE
             )
 
         completion_message: dict[str, Any] | None = None
@@ -1158,10 +1257,16 @@ class AgentCore:
                 metadata["stream_mode"] = "interleaved"
                 metadata["max_iterations"] = max_iterations
                 metadata["iteration_limit_exhausted"] = iteration_limit_exhausted
+                metadata["code_updated"] = code_updated
+                metadata["runtime_code_updated"] = runtime_code_updated
+                metadata["reprompt_required"] = reprompt_required
+                metadata["changed_files"] = sorted(changed_files)[:200]
+                metadata["runtime_dirty_files"] = sorted(runtime_dirty_files)[:200]
+                metadata["controlled_reload_enabled"] = bool(self.settings.repl_controlled_reload_enabled)
 
                 updated_last = await self.store.update_message(
                     message_id=last_message.id,
-                    content=limit_completion_text or None,
+                    content=completion_override,
                     message_metadata=metadata,
                 )
                 final_message = updated_last or last_message
@@ -1184,6 +1289,27 @@ class AgentCore:
                 "message": completion_message,
             }
         )
+
+        if reprompt_required:
+            await emit(
+                {
+                    "type": "main_agent_reprompt_required",
+                    "thread_id": thread_id,
+                    "run_id": run_id,
+                    "content": _CODE_UPDATE_REPROMPT_NOTICE,
+                    "summary": "Runtime updated; reprompt required",
+                    "message": {
+                        "runtime_dirty_files": sorted(runtime_dirty_files)[:20],
+                        "changed_files": sorted(changed_files)[:20],
+                    },
+                }
+            )
+
+        if reprompt_required and self.settings.repl_controlled_reload_enabled:
+            schedule_process_reload(
+                exit_code=self.settings.repl_controlled_reload_exit_code,
+                delay_ms=self.settings.repl_controlled_reload_delay_ms,
+            )
 
         return {
             "thread_id": thread_id,

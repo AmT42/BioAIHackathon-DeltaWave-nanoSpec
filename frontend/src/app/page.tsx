@@ -299,6 +299,12 @@ export default function Page() {
           sidebarOpen={sidebarOpen}
         />
 
+        {state.error && (
+          <div className="runtime-alert" role="status">
+            {state.error}
+          </div>
+        )}
+
         <div className="content-layout">
           <section className="chat-column">
             <div

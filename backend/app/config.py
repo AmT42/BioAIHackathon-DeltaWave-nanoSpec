@@ -62,6 +62,7 @@ class Settings:
     repl_shell_policy_mode: str
     repl_allowed_command_prefixes: tuple[str, ...]
     repl_blocked_command_prefixes: tuple[str, ...]
+    repl_blocked_command_patterns: tuple[str, ...]
     repl_env_snapshot_mode: str
     repl_env_snapshot_max_items: int
     repl_env_snapshot_max_preview_chars: int
@@ -84,6 +85,12 @@ class Settings:
     neo4j_database: str
     kg_query_timeout_seconds: int
     enable_kg_tools: bool
+    repl_git_tracking_enabled: bool
+    repl_runtime_sensitive_paths: tuple[str, ...]
+    repl_reprompt_required_on_code_change: bool
+    repl_controlled_reload_enabled: bool
+    repl_controlled_reload_exit_code: int
+    repl_controlled_reload_delay_ms: int
 
 
 def _normalize_reasoning_effort(value: str | None) -> str:
@@ -187,6 +194,10 @@ def get_settings() -> Settings:
         "REPL_BLOCKED_COMMAND_PREFIXES",
         "rm,shutdown,reboot,mkfs,dd,sudo,ssh,scp,nc,nmap,chmod,chown",
     )
+    blocked_patterns = _env_csv(
+        "REPL_BLOCKED_COMMAND_PATTERNS",
+        "git reset --hard,git checkout --,git clean -fd,git clean -xdf,> .env,>> .env,tee .env",
+    )
     repl_env_snapshot_mode = _normalize_repl_env_snapshot_mode(os.getenv("REPL_ENV_SNAPSHOT_MODE", "always"))
     repl_import_policy = _normalize_repl_import_policy(os.getenv("REPL_IMPORT_POLICY", "permissive"))
     repl_import_allow_modules = _env_csv("REPL_IMPORT_ALLOW_MODULES", "")
@@ -242,6 +253,7 @@ def get_settings() -> Settings:
         repl_shell_policy_mode=repl_shell_policy_mode,
         repl_allowed_command_prefixes=allowed_prefixes,
         repl_blocked_command_prefixes=blocked_prefixes,
+        repl_blocked_command_patterns=blocked_patterns,
         repl_env_snapshot_mode=repl_env_snapshot_mode,
         repl_env_snapshot_max_items=int(_env_int("REPL_ENV_SNAPSHOT_MAX_ITEMS", default=80) or 80),
         repl_env_snapshot_max_preview_chars=int(_env_int("REPL_ENV_SNAPSHOT_MAX_PREVIEW_CHARS", default=160) or 160),
@@ -267,4 +279,13 @@ def get_settings() -> Settings:
         neo4j_database=os.getenv("NEO4J_DATABASE_NAME", "neo4j"),
         kg_query_timeout_seconds=int(_env_int("KG_QUERY_TIMEOUT_SECONDS", default=12) or 12),
         enable_kg_tools=_env_bool("ENABLE_KG_TOOLS", default=False),
+        repl_git_tracking_enabled=_env_bool("REPL_GIT_TRACKING_ENABLED", default=True),
+        repl_runtime_sensitive_paths=_env_csv(
+            "REPL_RUNTIME_SENSITIVE_PATHS",
+            "backend/app,backend/scripts",
+        ),
+        repl_reprompt_required_on_code_change=_env_bool("REPL_REPROMPT_REQUIRED_ON_CODE_CHANGE", default=True),
+        repl_controlled_reload_enabled=_env_bool("REPL_CONTROLLED_RELOAD_ENABLED", default=False),
+        repl_controlled_reload_exit_code=int(_env_int("REPL_CONTROLLED_RELOAD_EXIT_CODE", default=75) or 75),
+        repl_controlled_reload_delay_ms=int(_env_int("REPL_CONTROLLED_RELOAD_DELAY_MS", default=350) or 350),
     )

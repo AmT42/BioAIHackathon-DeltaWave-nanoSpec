@@ -33,6 +33,8 @@
   --tool-border: rgba(134, 184, 244, 0.3);
   --success: #22c55e;
   --success-bg: rgba(34, 197, 94, 0.1);
+  --warning: #d97706;
+  --warning-bg: rgba(217, 119, 6, 0.12);
   --error: #ef4444;
   --error-bg: rgba(239, 68, 68, 0.1);
   --user-bg: rgba(99, 102, 241, 0.08);
@@ -233,6 +235,14 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+.runtime-alert {
+  margin: 10px 16px 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  background: color-mix(in srgb, var(--warning-bg) 70%, white);
+  color: var(--warning);
+  font-size: 0.84rem;
+  border-radius: var(--radius-sm);
 }
 
 /* ─── Header ─── */

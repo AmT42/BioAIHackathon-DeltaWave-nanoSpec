@@ -21,6 +21,40 @@ def _coerce_text(value: Any) -> str:
         return str(value)
 
 
+def _truncate_text(value: Any, *, max_chars: int = 3000) -> str:
+    text = str(value or "")
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3] + "..."
+
+
+def _compact_tool_payload_for_model(tool_name: str, payload: Any) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    normalized_tool = str(tool_name or "").strip().lower()
+    if normalized_tool == "repl_exec":
+        return {
+            "summary": payload.get("summary"),
+            "stdout": _truncate_text(payload.get("stdout")),
+            "stderr": _truncate_text(payload.get("stderr")),
+            "had_visible_output": payload.get("had_visible_output"),
+            "nested_tool_calls": payload.get("nested_tool_calls"),
+            "truncated": payload.get("truncated"),
+        }
+    if normalized_tool == "bash_exec":
+        return {
+            "summary": payload.get("summary"),
+            "command": payload.get("command"),
+            "returncode": payload.get("returncode"),
+            "stdout": _truncate_text(payload.get("stdout")),
+            "stderr": _truncate_text(payload.get("stderr")),
+            "truncated": payload.get("truncated"),
+        }
+    compact = dict(payload)
+    compact.pop("env", None)
+    return compact
+
+
 def build_claude_messages(events: list[CanonicalEventView]) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     tool_result_by_id: dict[str, list[dict[str, Any]]] = {}
@@ -369,6 +403,7 @@ def build_gemini_openai_messages(
             continue
 
         if event.kind == ConversationEventKind.TOOL_RESULT:
+            tool_name = str(event.content.get("tool_name") or "")
             flush_tool_calls()
             tool_call_id = event.content.get("tool_call_id") or event.tool_call_id
             payload = event.content.get("output")
@@ -376,18 +411,19 @@ def build_gemini_openai_messages(
                 payload = event.content.get("error", payload)
             if payload is None:
                 payload = {"status": event.content.get("status")}
-            payload_text = _coerce_text(payload)
+            payload_text = _coerce_text(_compact_tool_payload_for_model(tool_name, payload))
             if tool_call_id and str(tool_call_id) in seen_tool_call_ids:
                 tool_msg: dict[str, Any] = {
                     "role": "tool",
                     "tool_call_id": str(tool_call_id),
                     "content": payload_text,
                 }
-                if event.content.get("tool_name"):
-                    tool_msg["name"] = event.content.get("tool_name")
+                if tool_name:
+                    tool_msg["name"] = tool_name
                 messages.append(tool_msg)
             else:
-                messages.append({"role": "assistant", "content": f"Historical tool output:\\n{payload_text}"})
+                label = tool_name or "tool"
+                messages.append({"role": "assistant", "content": f"Historical tool output ({label}):\\n{payload_text}"})
 
     flush_tool_calls()
     return messages

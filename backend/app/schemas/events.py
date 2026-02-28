@@ -23,6 +23,7 @@ EventType = Literal[
     "main_agent_repl_env",
     "main_agent_repl_end",
     "main_agent_bash_command_token",
+    "main_agent_reprompt_required",
     "main_agent_complete",
     "main_agent_error",
 ]

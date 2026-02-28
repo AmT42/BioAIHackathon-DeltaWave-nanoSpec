@@ -499,6 +499,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   };
 
   switch (event.type) {
+    case "main_agent_reprompt_required": {
+      const message =
+        typeof event.content === "string" && event.content.trim().length > 0
+          ? event.content
+          : "Runtime updated. Send another prompt to continue with updated code.";
+      return { ...baseState, error: message };
+    }
+
     case "main_agent_error": {
       return { ...baseState, error: event.error ?? "Unknown error" };
     }

@@ -58,7 +58,7 @@ def test_build_gemini_messages_orphan_tool_result_falls_back_to_assistant_text()
     messages = build_gemini_messages(events)
     assert messages[0] == {"role": "user", "content": "hello"}
     assert messages[1]["role"] == "assistant"
-    assert "Historical tool output:" in messages[1]["content"]
+    assert "Historical tool output (tool):" in messages[1]["content"]
 
 
 def test_build_claude_messages_drops_orphan_tool_use_without_result() -> None:
@@ -157,3 +157,42 @@ def test_build_gemini_messages_tool_call_keeps_provider_specific_metadata() -> N
     tool_call = assistant_call["tool_calls"][0]
     assert tool_call["provider_specific_fields"] == {"thought_signature": "sig"}
     assert tool_call["extra_content"] == {"source": "gemini"}
+
+
+def test_build_gemini_messages_compacts_repl_tool_output_for_model() -> None:
+    events = [
+        _event(
+            role=ConversationEventRole.ASSISTANT,
+            kind=ConversationEventKind.TOOL_CALL,
+            content={
+                "type": "tool_call",
+                "tool_call_id": "repl_1",
+                "tool_name": "repl_exec",
+                "input": {"code": "print('x')"},
+            },
+            tool_call_id="repl_1",
+        ),
+        _event(
+            role=ConversationEventRole.TOOL,
+            kind=ConversationEventKind.TOOL_RESULT,
+            content={
+                "type": "tool_result",
+                "tool_call_id": "repl_1",
+                "tool_name": "repl_exec",
+                "status": "success",
+                "output": {
+                    "summary": "ok",
+                    "stdout": "value",
+                    "stderr": "",
+                    "env": {"after": {"items": [{"name": "secret", "preview": "[REDACTED]"}]}},
+                },
+            },
+            tool_call_id="repl_1",
+        ),
+    ]
+
+    messages = build_gemini_messages(events)
+    tool_message = next(message for message in messages if message.get("role") == "tool")
+    assert "summary" in str(tool_message.get("content") or "")
+    assert "stdout" in str(tool_message.get("content") or "")
+    assert "env" not in str(tool_message.get("content") or "")

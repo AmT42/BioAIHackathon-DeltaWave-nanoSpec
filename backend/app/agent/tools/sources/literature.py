@@ -428,6 +428,7 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
             data={
                 "term": term,
                 "count": total_count,
+                "total_results": total_count,
                 "pmids": pmids,
                 "query_translation": result.get("querytranslation"),
                 "webenv": result.get("webenv"),
