@@ -64,6 +64,21 @@ tylenol -> Acetaminophen).
 - ALWAYS assign a variable to relationships (e.g. -[r:REL_TYPE]-) and include \
 relevant relationship properties in RETURN. Check the "Relationship properties" \
 section for available properties on each relationship type.
+- Prefer stable RETURN aliases for flat projections (e.g., `drug_id`, `drug_name`, \
+`protein_id`, `protein_name`) instead of ambiguous bare fields like `name`.
+- Prefer connected graph rows: return node-relation-node tuples, not standalone node lists.
+- When user asks for traversal, neighborhood, or graph mapping, prefer explicit second-degree \
+connections (A->B->C) when supported by schema, and return both relationships.
+- For 2-hop queries, include ids/names for source, bridge, and target nodes and include \
+relationship type/properties for each hop in RETURN.
+- Never fabricate disconnected components if a connected path pattern can answer the question.
+- Keep the query read-only and exploration-friendly: allow connected traversal patterns with up to 3 MATCH clauses \
+and up to 1 OPTIONAL MATCH when needed for graph enrichment.
+- Prefer explicit 1-hop and 2-hop path patterns anchored on user entities to maximize connected subgraph coverage.
+- Do NOT use UNION, CALL subqueries, UNWIND, APOC, or variable-length path patterns (`*`).
+- Return enough columns to reconstruct graph structure (node ids/names + per-hop relationship type/properties).
+- Keep RETURN bounded (prefer <= 24 columns) and rely on LIMIT for result size control.
+- For broader exploration, run multiple anchored queries instead of one oversized query.
 
 Nodes:
 {node_types}
@@ -95,6 +110,134 @@ def _apply_limit(query: str, top_k: int) -> str:
     if re.search(r"\bLIMIT\s+\d+\b", query, flags=re.IGNORECASE):
         return re.sub(r"\bLIMIT\s+\d+\b", f"LIMIT {top_k}", query, flags=re.IGNORECASE)
     return f"{query.rstrip()} LIMIT {top_k}"
+
+
+_DEFAULT_KG_QUERY_TIMEOUT_SECONDS = 12.0
+_MAX_GENERATED_CYPHER_CHARS = 1800
+_MAX_GENERATED_MATCH_CLAUSES = 3
+_MAX_GENERATED_OPTIONAL_MATCH_CLAUSES = 1
+_MAX_GENERATED_WITH_CLAUSES = 2
+_MAX_GENERATED_RETURN_COLUMNS = 24
+
+
+def _normalize_query_timeout_seconds(value: Any) -> float:
+    try:
+        timeout = float(value)
+    except Exception:
+        return _DEFAULT_KG_QUERY_TIMEOUT_SECONDS
+    if timeout < 1.0:
+        return _DEFAULT_KG_QUERY_TIMEOUT_SECONDS
+    return min(timeout, 120.0)
+
+
+def _query_timeout_seconds(settings: Any) -> float:
+    return _normalize_query_timeout_seconds(getattr(settings, "kg_query_timeout_seconds", _DEFAULT_KG_QUERY_TIMEOUT_SECONDS))
+
+
+def _count_pattern(query: str, pattern: str) -> int:
+    return len(re.findall(pattern, query, flags=re.IGNORECASE | re.DOTALL))
+
+
+_RETURN_PATTERN = re.compile(
+    r"\bRETURN\b(?P<body>.+?)(?:\bORDER\s+BY\b|\bSKIP\b|\bLIMIT\b|$)",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+
+
+def _estimate_return_column_count(query: str) -> int:
+    matches = list(_RETURN_PATTERN.finditer(query))
+    if not matches:
+        return 0
+    body = re.sub(r"^\s*DISTINCT\s+", "", matches[-1].group("body"), flags=re.IGNORECASE).strip()
+    if not body:
+        return 0
+
+    depth_round = 0
+    depth_square = 0
+    depth_curly = 0
+    columns = 1
+    for ch in body:
+        if ch == "(":
+            depth_round += 1
+        elif ch == ")":
+            depth_round = max(0, depth_round - 1)
+        elif ch == "[":
+            depth_square += 1
+        elif ch == "]":
+            depth_square = max(0, depth_square - 1)
+        elif ch == "{":
+            depth_curly += 1
+        elif ch == "}":
+            depth_curly = max(0, depth_curly - 1)
+        elif ch == "," and depth_round == 0 and depth_square == 0 and depth_curly == 0:
+            columns += 1
+    return columns
+
+
+def _generated_cypher_guardrail_violations(query: str) -> list[str]:
+    issues: list[str] = []
+    compact = str(query or "").strip()
+    if not compact:
+        return ["query is empty"]
+
+    if len(compact) > _MAX_GENERATED_CYPHER_CHARS:
+        issues.append(f"query length exceeds {_MAX_GENERATED_CYPHER_CHARS} characters")
+
+    total_match = _count_pattern(compact, r"\bMATCH\b")
+    optional_match = _count_pattern(compact, r"\bOPTIONAL\s+MATCH\b")
+    non_optional_match = max(0, total_match - optional_match)
+    if non_optional_match > _MAX_GENERATED_MATCH_CLAUSES:
+        issues.append(f"too many MATCH clauses ({non_optional_match} > {_MAX_GENERATED_MATCH_CLAUSES})")
+    if optional_match > _MAX_GENERATED_OPTIONAL_MATCH_CLAUSES:
+        issues.append(
+            f"too many OPTIONAL MATCH clauses ({optional_match} > {_MAX_GENERATED_OPTIONAL_MATCH_CLAUSES})"
+        )
+
+    with_count = _count_pattern(compact, r"\bWITH\b")
+    if with_count > _MAX_GENERATED_WITH_CLAUSES:
+        issues.append(f"too many WITH clauses ({with_count} > {_MAX_GENERATED_WITH_CLAUSES})")
+
+    return_columns = _estimate_return_column_count(compact)
+    if return_columns > _MAX_GENERATED_RETURN_COLUMNS:
+        issues.append(f"too many RETURN columns ({return_columns} > {_MAX_GENERATED_RETURN_COLUMNS})")
+
+    if re.search(r"-\[[^\]]*\*[^\]]*\]-", compact, flags=re.IGNORECASE):
+        issues.append("variable-length path pattern detected (`*` inside relationship)")
+    if re.search(r"\bUNION\b", compact, flags=re.IGNORECASE):
+        issues.append("UNION is not allowed for generated KG queries")
+    if re.search(r"\bUNWIND\b", compact, flags=re.IGNORECASE):
+        issues.append("UNWIND is not allowed for generated KG queries")
+    if re.search(r"\bCALL\s*\{", compact, flags=re.IGNORECASE):
+        issues.append("CALL subquery is not allowed for generated KG queries")
+    if re.search(r"\bapoc\.", compact, flags=re.IGNORECASE):
+        issues.append("APOC procedure usage is not allowed for generated KG queries")
+    return issues
+
+
+_WRITE_CLAUSE_PATTERN = re.compile(
+    r"\b(CREATE|MERGE|DELETE|DETACH|SET|REMOVE|DROP|LOAD\s+CSV|FOREACH)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _assert_read_only_cypher(query: str) -> None:
+    if _WRITE_CLAUSE_PATTERN.search(str(query or "")):
+        raise ToolExecutionError(
+            code="VALIDATION_ERROR",
+            message="Only read-only Cypher queries are allowed.",
+            details={"reason": "write_clause_detected"},
+        )
+
+
+def _assert_generated_cypher_guardrails(query: str) -> None:
+    issues = _generated_cypher_guardrail_violations(query)
+    if not issues:
+        return
+    raise ToolExecutionError(
+        code="VALIDATION_ERROR",
+        message="Generated Cypher was too complex. Retry with a narrower KG question.",
+        details={"issues": issues, "cypher_preview": str(query or "")[:1200]},
+    )
 
 
 def _strip_embedding_fields(value: Any) -> Any:
@@ -385,12 +528,21 @@ def _execute_cypher(
     password: str,
     database: str,
     top_k: int = 25,
+    query_timeout_seconds: float = _DEFAULT_KG_QUERY_TIMEOUT_SECONDS,
 ) -> list[dict[str, Any]]:
     import neo4j  # lazy
 
     query_with_limit = _apply_limit(query.strip(), top_k=top_k)
+    timed_query = neo4j.Query(
+        query_with_limit,
+        timeout=_normalize_query_timeout_seconds(query_timeout_seconds),
+    )
     with neo4j.GraphDatabase.driver(uri, auth=(user, password)) as driver:
-        records, _, _ = driver.execute_query(query_with_limit, database_=database, routing_="r")
+        records, _, _ = driver.execute_query(
+            timed_query,
+            database_=database,
+            routing_="r",
+        )
 
     if not records:
         return []
@@ -564,6 +716,432 @@ def _collect_wrapped_graph_values(
             _collect_wrapped_graph_values(item, node_wrappers=node_wrappers, rel_wrappers=rel_wrappers)
 
 
+def _label_from_alias(alias: str) -> str:
+    parts = [part for part in alias.split("_") if part]
+    if not parts:
+        return "Unknown"
+    return "".join(part[:1].upper() + part[1:] for part in parts)
+
+
+def _singularize_alias(alias: str) -> str:
+    text = re.sub(r"[^a-zA-Z0-9_]+", "_", str(alias or "").strip().lower()).strip("_")
+    if not text:
+        return "unknown"
+    if text.endswith("ies") and len(text) > 3:
+        return text[:-3] + "y"
+    if text.endswith("ses") and len(text) > 3:
+        return text[:-2]
+    if text.endswith("s") and not text.endswith("ss") and len(text) > 1:
+        return text[:-1]
+    return text
+
+
+def _slugify_token(value: str) -> str:
+    text = re.sub(r"[^a-zA-Z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return text or "unknown"
+
+
+_SCALAR_ENTITY_ALIASES = {
+    "drug",
+    "compound",
+    "target",
+    "protein",
+    "gene",
+    "disease",
+    "phenotype",
+    "pathway",
+    "process",
+    "trial",
+    "intervention",
+    "treatment",
+    "organism",
+}
+
+_LIST_ENTITY_ALIASES = {
+    "pathway",
+    "process",
+    "phenotype",
+    "disease",
+    "gene",
+    "protein",
+    "target",
+    "mechanism",
+}
+
+
+_ID_PREFIX_ALIAS_HINTS: tuple[tuple[str, str], ...] = (
+    ("drugbank:", "drug"),
+    ("chembl.compound:", "drug"),
+    ("chembl:", "drug"),
+    ("pubchem.compound:", "compound"),
+    ("chebi:", "compound"),
+    ("uniprot:", "protein"),
+    ("ensembl:", "gene"),
+    ("entrez:", "gene"),
+    ("ncbigene:", "gene"),
+    ("mondo:", "disease"),
+    ("doid:", "disease"),
+    ("mesh:", "disease"),
+    ("efo:", "disease"),
+)
+
+
+_NAME_FIELD_PRIORITY: tuple[str, ...] = (
+    "name",
+    "primary_protein_name",
+    "gene_symbol",
+    "organism_name",
+    "label",
+    "title",
+)
+
+
+def _normalize_column_token(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _split_qualified_column_key(key: str) -> tuple[str, str] | None:
+    text = str(key or "").strip()
+    if "." not in text:
+        return None
+    left, right = text.split(".", 1)
+    alias = _singularize_alias(left)
+    field = _normalize_column_token(right)
+    if not alias or not field:
+        return None
+    return alias, field
+
+
+def _alias_hint_from_node_id(node_id: str) -> str | None:
+    lowered = str(node_id or "").strip().lower()
+    if not lowered:
+        return None
+    for prefix, alias in _ID_PREFIX_ALIAS_HINTS:
+        if lowered.startswith(prefix):
+            return alias
+    return None
+
+
+def _canonical_scalar_alias(raw_alias: str, node_id: str) -> str:
+    alias = _singularize_alias(raw_alias)
+    if not alias:
+        return alias
+    if alias in _SCALAR_ENTITY_ALIASES:
+        return alias
+    hint = _alias_hint_from_node_id(node_id)
+    if hint:
+        return hint
+    return alias
+
+
+def _infer_alias_pair(text: str, aliases: set[str]) -> tuple[str, str] | None:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return None
+
+    ordered_aliases = sorted(
+        [alias.strip().lower() for alias in aliases if str(alias).strip()],
+        key=len,
+        reverse=True,
+    )
+    for left_alias in ordered_aliases:
+        prefix = f"{left_alias}_"
+        if not normalized.startswith(prefix):
+            continue
+        remainder = normalized[len(prefix) :]
+        for right_alias in ordered_aliases:
+            suffix = f"_{right_alias}"
+            if remainder.endswith(suffix) and len(remainder) > len(suffix):
+                return left_alias, right_alias
+    return None
+
+
+def _collect_inferred_graph_values_from_flat_row(
+    row: dict[str, Any],
+    *,
+    node_wrappers: list[dict[str, Any]],
+    rel_wrappers: list[dict[str, Any]],
+) -> None:
+    alias_to_node_id: dict[str, str] = {}
+    alias_variants: dict[str, set[str]] = {}
+    alias_variant_to_alias: dict[str, str] = {}
+    alias_field_values: dict[str, dict[str, Any]] = {}
+    relation_field_values: dict[str, dict[str, Any]] = {}
+    alias_to_node_element_id: dict[str, str] = {}
+    alias_to_node_wrapper: dict[str, dict[str, Any]] = {}
+    alias_name_is_explicit: dict[str, bool] = {}
+    alias_order: list[str] = []
+
+    def register_node_alias(raw_alias: str, node_id: str) -> str:
+        normalized_raw_alias = _singularize_alias(raw_alias)
+        if not normalized_raw_alias:
+            return ""
+        canonical_alias = _canonical_scalar_alias(normalized_raw_alias, node_id)
+        if not canonical_alias:
+            return ""
+        alias_variant_to_alias[normalized_raw_alias] = canonical_alias
+        alias_variants.setdefault(canonical_alias, set()).add(normalized_raw_alias)
+        if canonical_alias not in alias_to_node_id:
+            alias_to_node_id[canonical_alias] = node_id
+            alias_order.append(canonical_alias)
+        return canonical_alias
+
+    # Pass 1: infer node aliases from *_id and alias.id columns.
+    for raw_key, raw_value in row.items():
+        if not isinstance(raw_value, str):
+            continue
+        node_id = raw_value.strip()
+        if not node_id:
+            continue
+
+        key = str(raw_key).strip()
+        raw_alias = ""
+        if key.endswith("_id"):
+            raw_alias = key[:-3].strip()
+        else:
+            qualified = _split_qualified_column_key(key)
+            if qualified:
+                dotted_alias, field = qualified
+                if field == "id":
+                    raw_alias = dotted_alias
+        if not raw_alias:
+            continue
+
+        canonical_alias = register_node_alias(raw_alias, node_id)
+        if not canonical_alias:
+            continue
+        alias_field_values.setdefault(canonical_alias, {})["id"] = node_id
+
+    # Pass 2: collect scoped fields for known node aliases and relation aliases.
+    for raw_key, raw_value in row.items():
+        key = str(raw_key).strip()
+        if key.endswith("_relationship"):
+            continue
+
+        if key.endswith("_name") and isinstance(raw_value, str) and raw_value.strip():
+            raw_alias = _singularize_alias(key[:-5].strip())
+            canonical_alias = alias_variant_to_alias.get(raw_alias)
+            if canonical_alias:
+                alias_field_values.setdefault(canonical_alias, {})["name"] = raw_value.strip()
+            continue
+
+        qualified = _split_qualified_column_key(key)
+        if not qualified:
+            continue
+        raw_alias, field = qualified
+        canonical_alias = alias_variant_to_alias.get(raw_alias)
+        if canonical_alias:
+            alias_field_values.setdefault(canonical_alias, {})[field] = raw_value
+            continue
+
+        if isinstance(raw_value, dict):
+            continue
+        relation_field_values.setdefault(raw_alias, {})[field] = raw_value
+
+    # Build node wrappers inferred from node aliases.
+    for alias in alias_order:
+        node_id = str(alias_to_node_id.get(alias, "")).strip()
+        if not node_id:
+            continue
+
+        fields = alias_field_values.get(alias, {})
+        node_name = ""
+        for field in _NAME_FIELD_PRIORITY:
+            value = fields.get(field)
+            if isinstance(value, str) and value.strip():
+                node_name = value.strip()
+                break
+        explicit_name = bool(node_name)
+        if not node_name:
+            node_name = node_id
+
+        element_id = f"inferred:{alias}:{node_id}"
+        alias_to_node_element_id[alias] = element_id
+        alias_name_is_explicit[alias] = explicit_name
+        node_wrapper = {
+            "__kind__": "node",
+            "__element_id__": element_id,
+            "__labels__": [_label_from_alias(alias)],
+            "id": node_id,
+            "name": node_name,
+        }
+        alias_to_node_wrapper[alias] = node_wrapper
+        node_wrappers.append(node_wrapper)
+
+    # If one node still has only ID as its label, use a single unscoped "name" column.
+    unscoped_name = row.get("name")
+    if isinstance(unscoped_name, str) and unscoped_name.strip():
+        candidate_aliases = [alias for alias in alias_order if not alias_name_is_explicit.get(alias, False)]
+        if len(candidate_aliases) == 1:
+            alias_to_node_wrapper[candidate_aliases[0]]["name"] = unscoped_name.strip()
+
+    # Projection-style rows often return named columns (e.g., Drug/Target/Pathways)
+    # without *_id fields. Infer node wrappers from scalar/list columns as fallback.
+    if not alias_to_node_element_id:
+        for raw_key, raw_value in row.items():
+            key = str(raw_key).strip()
+            if key.endswith("_relationship"):
+                continue
+            if not isinstance(raw_value, str):
+                continue
+            value = raw_value.strip()
+            if not value:
+                continue
+
+            alias = _singularize_alias(key)
+            if alias not in _SCALAR_ENTITY_ALIASES:
+                continue
+            element_id = f"inferred:{alias}:{value}"
+            if alias not in alias_to_node_element_id:
+                alias_to_node_element_id[alias] = element_id
+                alias_order.append(alias)
+            node_wrappers.append(
+                {
+                    "__kind__": "node",
+                    "__element_id__": element_id,
+                    "__labels__": [_label_from_alias(alias)],
+                    "id": value,
+                    "name": value,
+                }
+            )
+
+    aliases = set(alias_to_node_element_id.keys())
+    rel_count_before = len(rel_wrappers)
+
+    # Existing explicit relationship payloads (e.g., drug_targets_protein_relationship).
+    for raw_key, raw_value in row.items():
+        key = str(raw_key).strip()
+        if not key.endswith("_relationship") or not isinstance(raw_value, dict):
+            continue
+
+        relation_properties = {str(k): v for k, v in raw_value.items()}
+        relation_type = (
+            str(relation_properties.get("relationship_type") or key[:-13] or "RELATED_TO").strip() or "RELATED_TO"
+        )
+        alias_pair = _infer_alias_pair(key[:-13], aliases) or _infer_alias_pair(relation_type, aliases)
+        if alias_pair is None:
+            continue
+        source_alias, target_alias = alias_pair
+        source_element_id = alias_to_node_element_id.get(source_alias)
+        target_element_id = alias_to_node_element_id.get(target_alias)
+        if not source_element_id or not target_element_id:
+            continue
+
+        relation_element_id = str(
+            relation_properties.get("relationship_id")
+            or relation_properties.get("id")
+            or f"inferred:{key}:{source_element_id}->{target_element_id}"
+        ).strip()
+        rel_wrapper = {
+            "__kind__": "relationship",
+            "__element_id__": relation_element_id,
+            "__type__": relation_type,
+            "__start_element_id__": source_element_id,
+            "__end_element_id__": target_element_id,
+        }
+        rel_wrapper.update(relation_properties)
+        rel_wrappers.append(rel_wrapper)
+
+    # Dotted relationship properties (e.g., r.confidence_score, r.source).
+    if len(alias_order) >= 2:
+        source_alias = alias_order[0]
+        target_alias = alias_order[1]
+        source_element_id = alias_to_node_element_id.get(source_alias, "")
+        target_element_id = alias_to_node_element_id.get(target_alias, "")
+        if source_element_id and target_element_id:
+            fallback_rel_type = f"{_label_from_alias(source_alias)}_related_to_{_label_from_alias(target_alias)}"
+            for rel_alias, fields in relation_field_values.items():
+                if not fields:
+                    continue
+                relation_type = str(fields.get("relationship_type") or fields.get("type") or fallback_rel_type).strip()
+                relation_type = relation_type or fallback_rel_type
+                relation_element_id = str(
+                    fields.get("relationship_id")
+                    or fields.get("id")
+                    or f"inferred:{rel_alias}:{source_element_id}->{target_element_id}"
+                ).strip()
+                rel_wrapper = {
+                    "__kind__": "relationship",
+                    "__element_id__": relation_element_id,
+                    "__type__": relation_type,
+                    "__start_element_id__": source_element_id,
+                    "__end_element_id__": target_element_id,
+                }
+                rel_wrapper.update(fields)
+                rel_wrappers.append(rel_wrapper)
+
+    # If explicit relationship wrappers are absent, infer at least one link
+    # between the first two scalar entities so subgraph/stats are non-empty.
+    if len(rel_wrappers) == rel_count_before and len(alias_order) >= 2:
+        source_alias = alias_order[0]
+        target_alias = alias_order[1]
+        source_element_id = alias_to_node_element_id[source_alias]
+        target_element_id = alias_to_node_element_id[target_alias]
+        rel_wrappers.append(
+            {
+                "__kind__": "relationship",
+                "__element_id__": f"inferred:{source_alias}-to-{target_alias}:{source_element_id}->{target_element_id}",
+                "__type__": f"{_label_from_alias(source_alias)}_related_to_{_label_from_alias(target_alias)}",
+                "__start_element_id__": source_element_id,
+                "__end_element_id__": target_element_id,
+            }
+        )
+
+    # Attach list-valued columns (e.g., Pathways, Processes) as neighboring nodes.
+    if aliases:
+        anchor_alias = ""
+        for preferred in ("target", "protein", "gene", "disease", "drug", "compound"):
+            if preferred in alias_to_node_element_id:
+                anchor_alias = preferred
+                break
+        if not anchor_alias and alias_order:
+            anchor_alias = alias_order[0]
+
+        if anchor_alias:
+            anchor_element_id = alias_to_node_element_id.get(anchor_alias, "")
+            for raw_key, raw_value in row.items():
+                if not isinstance(raw_value, list):
+                    continue
+                normalized_values = [str(item).strip() for item in raw_value if isinstance(item, str) and str(item).strip()]
+                if not normalized_values:
+                    continue
+
+                field_alias = _singularize_alias(str(raw_key).strip())
+                if field_alias not in _LIST_ENTITY_ALIASES:
+                    continue
+                field_label = _label_from_alias(field_alias)
+                rel_type = f"{_label_from_alias(anchor_alias)}_has_{field_label}"
+                seen_values: set[str] = set()
+                for item_value in normalized_values:
+                    lowered = item_value.lower()
+                    if lowered in seen_values:
+                        continue
+                    seen_values.add(lowered)
+
+                    item_element_id = f"inferred:{field_alias}:{item_value}"
+                    node_wrappers.append(
+                        {
+                            "__kind__": "node",
+                            "__element_id__": item_element_id,
+                            "__labels__": [field_label],
+                            "id": item_value,
+                            "name": item_value,
+                        }
+                    )
+                    rel_wrappers.append(
+                        {
+                            "__kind__": "relationship",
+                            "__element_id__": (
+                                f"inferred:{anchor_alias}-to-{field_alias}:{_slugify_token(item_value)}:"
+                                f"{anchor_element_id}->{item_element_id}"
+                            ),
+                            "__type__": rel_type,
+                            "__start_element_id__": anchor_element_id,
+                            "__end_element_id__": item_element_id,
+                        }
+                    )
+
+
 def _upsert_node(
     node_wrapper: dict[str, Any],
     *,
@@ -631,7 +1209,11 @@ def _extract_subgraph_from_records(records: list[dict[str, Any]]) -> tuple[dict[
     node_wrappers: list[dict[str, Any]] = []
     rel_wrappers: list[dict[str, Any]] = []
     for row in records:
+        node_count_before = len(node_wrappers)
+        rel_count_before = len(rel_wrappers)
         _collect_wrapped_graph_values(row, node_wrappers=node_wrappers, rel_wrappers=rel_wrappers)
+        if len(node_wrappers) == node_count_before and len(rel_wrappers) == rel_count_before:
+            _collect_inferred_graph_values_from_flat_row(row, node_wrappers=node_wrappers, rel_wrappers=rel_wrappers)
 
     nodes_by_key: dict[str, dict[str, Any]] = {}
     element_to_key: dict[str, str] = {}
@@ -954,6 +1536,7 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
 
         api_key = _require_gemini_key(settings)
         uri, user, password, database = _require_neo4j_settings(settings)
+        query_timeout_seconds = _query_timeout_seconds(settings)
 
         try:
             cypher = _generate_cypher_via_gemini(question, schema, api_key)
@@ -966,21 +1549,35 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
 
         if edges:
             cypher = _correct_cypher(cypher, edges)
+        _assert_read_only_cypher(cypher)
+        _assert_generated_cypher_guardrails(cypher)
 
         try:
-            rows = _execute_cypher(cypher, uri=uri, user=user, password=password, database=database, top_k=top_k)
+            rows = _execute_cypher(
+                cypher,
+                uri=uri,
+                user=user,
+                password=password,
+                database=database,
+                top_k=top_k,
+                query_timeout_seconds=query_timeout_seconds,
+            )
         except Exception as exc:
             raise ToolExecutionError(
                 code="UPSTREAM_ERROR",
                 message=f"Neo4j query execution failed: {exc}",
                 retryable=True,
-                details={"cypher": cypher},
+                details={"cypher": cypher, "query_timeout_seconds": query_timeout_seconds},
             ) from exc
 
         data: dict[str, Any] = {"cypher": cypher, "records": rows}
-        data["subgraph"] = _build_canonical_subgraph(rows)
+        warnings: list[str] = []
+        subgraph = _build_canonical_subgraph(rows)
+        data["subgraph"] = subgraph
         if include_node_stats:
             data["node_stats"] = _build_query_local_node_stats(rows, top_n_per_type=top_n_per_type)
+        if rows and int(((subgraph.get("summary") or {}).get("node_count") or 0)) == 0:
+            warnings.append("KG rows returned but no graph entities could be inferred for subgraph/node_stats.")
 
         summary = f"KG query returned {len(rows)} records" if rows else "KG query returned no results"
         return make_tool_output(
@@ -988,6 +1585,7 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
             summary=summary,
             result_kind="record_list",
             data=data,
+            warnings=warnings,
         )
 
     # --- kg_cypher_execute handler ------------------------------------------
@@ -1005,24 +1603,38 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
             raise ToolExecutionError(code="VALIDATION_ERROR", message="'top_n_per_type' must be between 1 and 25")
 
         uri, user, password, database = _require_neo4j_settings(settings)
+        query_timeout_seconds = _query_timeout_seconds(settings)
 
         if correct and edges:
             cypher = _correct_cypher(cypher, edges)
+        _assert_read_only_cypher(cypher)
 
         try:
-            rows = _execute_cypher(cypher, uri=uri, user=user, password=password, database=database, top_k=top_k)
+            rows = _execute_cypher(
+                cypher,
+                uri=uri,
+                user=user,
+                password=password,
+                database=database,
+                top_k=top_k,
+                query_timeout_seconds=query_timeout_seconds,
+            )
         except Exception as exc:
             raise ToolExecutionError(
                 code="UPSTREAM_ERROR",
                 message=f"Neo4j query execution failed: {exc}",
                 retryable=True,
-                details={"cypher": cypher},
+                details={"cypher": cypher, "query_timeout_seconds": query_timeout_seconds},
             ) from exc
 
         data: dict[str, Any] = {"cypher": cypher, "records": rows}
-        data["subgraph"] = _build_canonical_subgraph(rows)
+        warnings: list[str] = []
+        subgraph = _build_canonical_subgraph(rows)
+        data["subgraph"] = subgraph
         if include_node_stats:
             data["node_stats"] = _build_query_local_node_stats(rows, top_n_per_type=top_n_per_type)
+        if rows and int(((subgraph.get("summary") or {}).get("node_count") or 0)) == 0:
+            warnings.append("Cypher rows returned but no graph entities could be inferred for subgraph/node_stats.")
 
         summary = f"Cypher returned {len(rows)} records" if rows else "Cypher returned no results"
         return make_tool_output(
@@ -1030,6 +1642,7 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
             summary=summary,
             result_kind="record_list",
             data=data,
+            warnings=warnings,
         )
 
     # --- ToolSpec definitions -----------------------------------------------
@@ -1038,17 +1651,26 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
         description=render_tool_description(
             purpose="Query the CROssBAR biomedical knowledge graph with a natural-language question. "
             "Translates the question into a Cypher query, validates relationship directions, "
-            "and executes it against a Neo4j database.",
+            "and executes it against a Neo4j database. Optimized for connected node-edge-node rows "
+            "that are usable for graph visualization and traversal, including graph-enrichment passes "
+            "for second-degree neighborhoods.",
             when=[
                 "user asks about gene-disease associations, drug targets, protein interactions, pathways, or other biomedical relationships",
                 "need structured entity data from the CROssBAR knowledge graph",
+                "need connected subgraph outputs (including second-degree/2-hop paths) rather than isolated entities",
+                "need richer neighborhood exploration to expand graph connectivity before downstream analysis",
             ],
             avoid=[
                 "questions better answered by literature search (use literature tools instead)",
                 "when the user already provides a Cypher query (use kg_cypher_execute)",
             ],
-            critical_args=["question (str, required): the biomedical question in natural language"],
-            returns="record_list with cypher query used and matching records from the knowledge graph",
+            critical_args=[
+                "question (str, required): the biomedical question in natural language; specify direct links, 2-hop traversal, or enrichment intent",
+            ],
+            returns=(
+                "record_list with cypher query used and matching connected rows from the knowledge graph "
+                "(node/edge tuples suitable for subgraph building)"
+            ),
             fails_if=[
                 "Neo4j credentials not configured",
                 "Gemini API key not set",
@@ -1060,11 +1682,14 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
             "properties": {
                 "question": {
                     "type": "string",
-                    "description": "Natural-language biomedical question to query the knowledge graph",
+                    "description": (
+                        "Natural-language biomedical question to query the knowledge graph. "
+                        "If you want traversal-ready output, explicitly ask for connected or 2-hop relationships."
+                    ),
                 },
                 "top_k": {
                     "type": "integer",
-                    "description": "Maximum number of result rows (1-100, default 25)",
+                    "description": "Maximum number of result rows (1-100, default 25). Use higher values (e.g., 25-60) for graph enrichment/traversal coverage.",
                     "default": 25,
                 },
                 "include_node_stats": {
@@ -1090,16 +1715,19 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
         name="kg_cypher_execute",
         description=render_tool_description(
             purpose="Execute a raw Cypher query directly against the CROssBAR Neo4j knowledge graph. "
-            "Optionally validates and corrects relationship directions before execution.",
+            "Optionally validates and corrects relationship directions before execution. "
+            "Best for explicit connected path queries (including two-hop traversals and enrichment-focused neighborhood expansion).",
             when=[
                 "user provides an explicit Cypher query to run",
                 "need to run a follow-up or refined query after inspecting kg_query results",
+                "need to control exact connected path shape for graph mapping/traversal",
+                "need to deliberately expand local graph neighborhoods while preserving connectedness",
             ],
             avoid=[
                 "when user asks a natural-language question (use kg_query instead)",
             ],
             critical_args=["cypher (str, required): the Cypher query to execute"],
-            returns="record_list with the executed cypher and matching records",
+            returns="record_list with the executed cypher and matching connected records from the knowledge graph",
             fails_if=[
                 "Neo4j credentials not configured",
                 "Cypher syntax is invalid",
@@ -1110,11 +1738,14 @@ def build_kg_tools(settings: Any) -> list[ToolSpec]:
             "properties": {
                 "cypher": {
                     "type": "string",
-                    "description": "Cypher query to execute against the CROssBAR knowledge graph",
+                    "description": (
+                        "Cypher query to execute against the CROssBAR knowledge graph. "
+                        "Prefer connected node-edge path returns (including 2-hop chains) for graph traversal use-cases."
+                    ),
                 },
                 "top_k": {
                     "type": "integer",
-                    "description": "Maximum number of result rows (1-100, default 25)",
+                    "description": "Maximum number of result rows (1-100, default 25). Use higher values for enrichment-oriented traversal queries.",
                     "default": 25,
                 },
                 "correct_directions": {

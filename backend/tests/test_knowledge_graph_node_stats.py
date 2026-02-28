@@ -141,3 +141,87 @@ def test_canonical_subgraph_contains_nodes_and_edges() -> None:
     assert edge["target"] == "n-protein"
     assert edge["type"] == "Drug_targets_protein"
     assert edge["weight"] > 1.0
+
+
+def test_flat_records_infer_subgraph_and_node_stats() -> None:
+    records = [
+        {
+            "drug_id": "drugbank:DB01050",
+            "drug_name": "Ibuprofen",
+            "protein_id": "uniprot:P08183",
+            "protein_name": "ATP-dependent translocase ABCB1",
+            "drug_targets_protein_relationship": {
+                "relationship_type": "Drug_targets_protein",
+                "confidence_score": 0.6,
+                "source": ["DGIdb"],
+            },
+        }
+    ]
+
+    subgraph = _build_canonical_subgraph(records)
+    assert subgraph["summary"] == {"node_count": 2, "edge_count": 1}
+    assert {row["node_type"] for row in subgraph["nodes"]} == {"Drug", "Protein"}
+
+    stats = _build_query_local_node_stats(records, top_n_per_type=5)
+    assert stats["summary"]["node_count"] == 2
+    assert stats["summary"]["edge_count"] == 1
+    assert stats["summary"]["node_type_count"] == 2
+    assert {row["node_type"] for row in stats["by_type"]} == {"Drug", "Protein"}
+
+
+def test_dotted_flat_records_infer_subgraph_and_node_stats() -> None:
+    records = [
+        {
+            "d.id": "drugbank:DB00877",
+            "d.name": "Sirolimus",
+            "p.id": "uniprot:Q9JLN9",
+            "name": "Serine/threonine-protein kinase mTOR",
+            "r.confidence_score": 0.9,
+            "r.activity_type": "IC50",
+        }
+    ]
+
+    subgraph = _build_canonical_subgraph(records)
+    assert subgraph["summary"] == {"node_count": 2, "edge_count": 1}
+    assert {row["node_type"] for row in subgraph["nodes"]} == {"Drug", "Protein"}
+    names = {row["name"] for row in subgraph["nodes"]}
+    assert "Sirolimus" in names
+    assert "Serine/threonine-protein kinase mTOR" in names
+    assert subgraph["edges"][0]["weight"] > 1.0
+
+    stats = _build_query_local_node_stats(records, top_n_per_type=5)
+    assert stats["summary"]["node_count"] == 2
+    assert stats["summary"]["edge_count"] == 1
+    assert stats["summary"]["node_type_count"] == 2
+    assert {row["node_type"] for row in stats["by_type"]} == {"Drug", "Protein"}
+
+
+def test_projection_rows_infer_subgraph_and_node_stats() -> None:
+    records = [
+        {
+            "Drug": "Sirolimus",
+            "Target": "Serine/threonine-protein kinase mTOR",
+            "Processes": [
+                "positive regulation of cellular senescence",
+                "regulation of autophagy",
+            ],
+            "Pathways": [
+                "mTORC1-mediated signalling",
+                "Autophagy",
+            ],
+        }
+    ]
+
+    subgraph = _build_canonical_subgraph(records)
+    assert subgraph["summary"]["node_count"] >= 4
+    assert subgraph["summary"]["edge_count"] >= 3
+    assert any(row["node_type"] == "Drug" for row in subgraph["nodes"])
+    assert any(row["node_type"] == "Target" for row in subgraph["nodes"])
+    assert any(row["node_type"] == "Pathway" for row in subgraph["nodes"])
+    assert any(row["node_type"] == "Process" for row in subgraph["nodes"])
+
+    stats = _build_query_local_node_stats(records, top_n_per_type=5)
+    assert stats["summary"]["node_count"] >= 4
+    assert stats["summary"]["edge_count"] >= 3
+    assert stats["summary"]["node_type_count"] >= 4
+    assert any(row["node_type"] == "Target" for row in stats["by_type"])

@@ -13,9 +13,16 @@ type KgGraphPanelProps = {
 export function KgGraphPanel({ graph }: KgGraphPanelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cyRef = useRef<Core | null>(null);
+  const selectedNodeKeyRef = useRef<string | null>(null);
+  const topologySignatureRef = useRef<string>("");
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null);
 
   const { elements, nodeTypeColors } = useMemo(() => buildCytoscapeElements(graph), [graph]);
+  const topologySignature = useMemo(() => {
+    const nodeKeys = Object.keys(graph.nodes_by_key).sort();
+    const edgeKeys = Object.keys(graph.edges_by_key).sort();
+    return `n:${nodeKeys.join("|")}::e:${edgeKeys.join("|")}`;
+  }, [graph.nodes_by_key, graph.edges_by_key]);
   const selectedNode = selectedNodeKey ? graph.nodes_by_key[selectedNodeKey] ?? null : null;
   const hasGraph = graph.summary.node_count > 0;
 
@@ -44,17 +51,26 @@ export function KgGraphPanel({ graph }: KgGraphPanelProps) {
               "text-halign": "center",
               color: "#ececf1",
               "text-outline-width": 1,
-              "text-outline-color": "#16181d",
+              "text-outline-color": "#0f1318",
               "background-color": "data(color)",
-              "border-width": 1.5,
-              "border-color": "#20242a",
+              "border-width": "mapData(score, 0, 1, 1.3, 3.8)",
+              "border-color": "data(border_color)",
             },
           },
           {
             selector: "node[is_top = 1]",
             style: {
-              "border-width": 4,
-              "border-color": "#f2d37f",
+              "border-width": 4.8,
+              "border-color": "#ffe08c",
+            },
+          },
+          {
+            selector: "node:selected",
+            style: {
+              "overlay-opacity": 0,
+              "border-width": 5.2,
+              "border-color": "#fff5cf",
+              "z-index": 9999,
             },
           },
           {
@@ -71,6 +87,7 @@ export function KgGraphPanel({ graph }: KgGraphPanelProps) {
         ],
         wheelSensitivity: 0.18,
         boxSelectionEnabled: false,
+        selectionType: "single",
         userPanningEnabled: true,
         userZoomingEnabled: true,
       });
@@ -98,41 +115,85 @@ export function KgGraphPanel({ graph }: KgGraphPanelProps) {
   }, []);
 
   useEffect(() => {
+    selectedNodeKeyRef.current = selectedNodeKey;
+    const cy = cyRef.current;
+    if (!cy) return;
+    cy.batch(() => {
+      cy.nodes().unselect();
+      if (!selectedNodeKey) return;
+      const node = cy.getElementById(selectedNodeKey);
+      if (!node.empty()) {
+        node.select();
+      }
+    });
+  }, [selectedNodeKey]);
+
+  useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
 
     const hadNodes = cy.nodes().length > 0;
+    const topologyChanged = topologySignatureRef.current !== topologySignature;
+    topologySignatureRef.current = topologySignature;
     const previousZoom = cy.zoom();
     const previousPan = cy.pan();
+    const previousPositions = new Map<string, { x: number; y: number }>();
+    if (hadNodes) {
+      cy.nodes().forEach((node) => {
+        previousPositions.set(node.id(), node.position());
+      });
+    }
 
     cy.batch(() => {
       cy.elements().remove();
       cy.add(elements as never);
+      if (previousPositions.size > 0) {
+        cy.nodes().forEach((node) => {
+          const previous = previousPositions.get(node.id());
+          if (previous) {
+            node.position(previous);
+          }
+        });
+      }
     });
 
     if (cy.nodes().length > 0) {
-      const layout = cy.layout({
-        name: "cose",
-        animate: false,
-        fit: !hadNodes,
-        padding: 36,
-        nodeRepulsion: 4200,
-        edgeElasticity: 120,
-        idealEdgeLength: 90,
-      });
-      layout.run();
-      if (!hadNodes) {
-        cy.fit(cy.elements(), 36);
+      if (!hadNodes || topologyChanged) {
+        const layout = cy.layout({
+          name: "cose",
+          animate: false,
+          fit: !hadNodes,
+          randomize: false,
+          padding: 36,
+          nodeRepulsion: 4200,
+          edgeElasticity: 120,
+          idealEdgeLength: 90,
+        });
+        layout.run();
+        if (!hadNodes) {
+          cy.fit(cy.elements(), 36);
+        } else {
+          cy.zoom(previousZoom);
+          cy.pan(previousPan);
+        }
       } else {
         cy.zoom(previousZoom);
         cy.pan(previousPan);
       }
     }
 
-    if (selectedNodeKey && cy.getElementById(selectedNodeKey).empty()) {
+    const preservedSelection = selectedNodeKeyRef.current;
+    if (preservedSelection && cy.getElementById(preservedSelection).empty()) {
       setSelectedNodeKey(null);
+      return;
     }
-  }, [elements, selectedNodeKey]);
+    if (preservedSelection) {
+      cy.batch(() => {
+        cy.nodes().unselect();
+        cy.getElementById(preservedSelection).select();
+      });
+    }
+  }, [elements, topologySignature]);
 
   function handleFit() {
     const cy = cyRef.current;
@@ -166,10 +227,17 @@ export function KgGraphPanel({ graph }: KgGraphPanelProps) {
       </div>
 
       <div className="kg-panel__legend">
-        <div className="kg-panel__legend-line">
+        <div className="kg-panel__legend-line kg-panel__legend-line--importance">
           <span className="kg-panel__legend-label">Importance</span>
-          <span className="kg-panel__gradient" />
-          <span className="kg-panel__legend-label">Low to high</span>
+          <div className="kg-panel__gradient-wrap">
+            <span className="kg-panel__gradient" />
+            <span className="kg-panel__gradient-ticks">
+              <span>0.0</span>
+              <span>0.5</span>
+              <span>1.0</span>
+            </span>
+          </div>
+          <span className="kg-panel__legend-label">Heat + size</span>
         </div>
         <div className="kg-panel__legend-line">
           <span className="kg-panel__top-dot" />

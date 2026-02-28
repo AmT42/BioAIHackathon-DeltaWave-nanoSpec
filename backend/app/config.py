@@ -53,6 +53,7 @@ class Settings:
     neo4j_user: str | None
     neo4j_password: str | None
     neo4j_database: str
+    kg_query_timeout_seconds: int
     enable_kg_tools: bool
 
 
@@ -130,5 +131,6 @@ def get_settings() -> Settings:
         neo4j_user=os.getenv("NEO4J_USERNAME"),
         neo4j_password=os.getenv("NEO4J_PASSWORD"),
         neo4j_database=os.getenv("NEO4J_DATABASE_NAME", "neo4j"),
+        kg_query_timeout_seconds=int(_env_int("KG_QUERY_TIMEOUT_SECONDS", default=12) or 12),
         enable_kg_tools=_env_bool("ENABLE_KG_TOOLS", default=False),
     )

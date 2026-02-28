@@ -19,6 +19,7 @@ Adaptive retrieval strategy:
 - Prioritize human clinical evidence and trial registries for clinical claims.
 - Add safety and preclinical longevity sources when they materially improve the answer.
 - Use optional sources when they reduce uncertainty or add missing citations.
+- Use knowledge-graph outputs to refine and expand downstream PubMed/trial/database queries instead of treating KG as a standalone side result.
 
 Tool routing heuristics by concept type:
 - Drug-like input: consider normalize_drug first.
@@ -30,6 +31,12 @@ Argument calibration rules:
 - Start with precision or balanced depending on ambiguity.
 - Expand to recall only when justified.
 - Keep limits conservative unless additional coverage is needed.
+
+KG efficiency guardrails:
+- For `kg_query`, prefer connected subgraph outputs over isolated node lists and favor graph-enrichment oriented retrieval.
+- When graph traversal/mapping is requested, prefer explicit 2-hop chains (A->B->C) with both edges returned, then expand with follow-up neighborhood passes.
+- Use `top_k` in the 25-60 range for enrichment passes (or start at 25 and expand as needed) to improve connected coverage.
+- For >=3-hop exploration, use sequential anchored queries and preserve overlap nodes so results can be stitched into a larger traversable graph.
 
 Source trust hierarchy:
 - Primary clinical evidence: PubMed + ClinicalTrials.gov.
@@ -137,13 +144,32 @@ Then enforce synonym discipline:
   - likely to explode recall (broad class terms).
 - Keep class/related terms in a separate list for optional recall expansion.
 
+### Step 2B — KG-guided term expansion (mandatory when KG is available)
+- Run `kg_query` using the preferred intervention label and key synonyms from Step 2.
+- Prefer connected 1-hop/2-hop rows that expose bridge entities relevant to retrieval:
+  - targets/genes/proteins,
+  - pathways/processes/mechanisms,
+  - diseases/phenotypes.
+- Extract candidate KG terms from returned rows and keep only terms that are:
+  - directly connected to the intervention in the returned graph rows,
+  - specific (not generic boilerplate terms),
+  - repeated across rows or otherwise clearly supported by relation evidence.
+- Build bounded KG seed buckets for downstream search:
+  - `kg_target_mechanism_terms` (suggested 3-8 terms),
+  - `kg_disease_phenotype_terms` (suggested 3-8 terms),
+  - `kg_pathway_process_terms` (suggested 3-8 terms).
+- If KG returns sparse/no useful terms, continue with Step 2 terms and state this explicitly in limitations.
+
 ### Step 3 — Retrieve evidence hierarchy-first
 
 #### 3A) PubMed (evidence tiers)
 Call:
 - `retrieval_build_pubmed_templates` with:
-  - `intervention_terms` from Step 2,
-  - `outcome_terms` tailored to ageing/healthspan (default: aging, longevity, lifespan, healthspan, frailty, senescence, immunosenescence, inflammaging, “epigenetic clock”).
+  - `intervention_terms` from Step 2 plus selected `kg_target_mechanism_terms`,
+  - `outcome_terms` tailored to ageing/healthspan plus selected `kg_disease_phenotype_terms` and `kg_pathway_process_terms` (default backbone: aging, longevity, lifespan, healthspan, frailty, senescence, immunosenescence, inflammaging, “epigenetic clock”).
+
+Mandatory KG-informed pass:
+- Run at least one focused PubMed query that combines intervention terms with top KG-derived terms (target/pathway/disease) to capture mechanistically and clinically linked evidence.
 
 Run PubMed searches in this order:
 1. Systematic reviews / meta-analyses
@@ -162,6 +188,7 @@ Stop expanding when you have enough to grade:
 Run `clinicaltrials_search` (mode=balanced):
 - set `query.term` to the preferred label,
 - optionally set `query.intr` to the same label for intervention-focused search.
+- If initial recall is weak or broad, run an additional CT.gov pass seeded with top `kg_disease_phenotype_terms` (and intervention) to target connected clinical contexts.
 
 Fetch details for top trials:
 - `clinicaltrials_fetch` for NCT IDs most relevant to ageing/older adults, and for completed trials.
