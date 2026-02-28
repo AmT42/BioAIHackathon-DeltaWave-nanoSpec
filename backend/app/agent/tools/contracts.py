@@ -33,21 +33,6 @@ def _coerce_result_kind(value: Any) -> str:
         return candidate
     return "record_list"
 
-
-def _coerce_tool_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    out: list[str] = []
-    seen: set[str] = set()
-    for item in value:
-        tool = str(item or "").strip()
-        if not tool or tool in seen:
-            continue
-        seen.add(tool)
-        out.append(tool)
-    return out
-
-
 def make_tool_output(
     *,
     source: str,
@@ -61,7 +46,6 @@ def make_tool_output(
     pagination: dict[str, Any] | None = None,
     auth_required: bool = False,
     auth_configured: bool = True,
-    next_recommended_tools: list[str] | None = None,
     request_id: str | None = None,
     ctx: ToolContext | None = None,
 ) -> dict[str, Any]:
@@ -88,9 +72,6 @@ def make_tool_output(
                 "configured": bool(auth_configured),
             },
             "lineage": _lineage_from_ctx(ctx),
-        },
-        "guidance": {
-            "next_recommended_tools": _coerce_tool_list(next_recommended_tools or []),
         },
     }
 
@@ -143,11 +124,7 @@ def normalize_tool_output(
         source_meta["auth"] = auth
         source_meta.setdefault("lineage", _lineage_from_ctx(ctx))
         normalized["source_meta"] = source_meta
-        guidance = normalized.get("guidance")
-        if not isinstance(guidance, dict):
-            guidance = {}
-        guidance["next_recommended_tools"] = _coerce_tool_list(guidance.get("next_recommended_tools"))
-        normalized["guidance"] = guidance
+        normalized.pop("guidance", None)
         return normalized
 
     summary = str(output.get("summary") or "Tool completed.")
@@ -168,9 +145,6 @@ def normalize_tool_output(
         auth_configured=bool(((output.get("source_meta") or {}).get("auth") or {}).get("configured"))
         if isinstance(output.get("source_meta"), dict)
         else True,
-        next_recommended_tools=_coerce_tool_list((output.get("guidance") or {}).get("next_recommended_tools"))
-        if isinstance(output.get("guidance"), dict)
-        else [],
         request_id=(output.get("source_meta") or {}).get("request_id") if isinstance(output.get("source_meta"), dict) else None,
         ctx=ctx,
     )

@@ -133,7 +133,6 @@ def build_safety_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             artifacts=artifact_refs,
             pagination={"next_page_token": str(page + 1) if has_more else None, "has_more": has_more},
             request_id=_request_id(headers),
-            next_recommended_tools=["dailymed_fetch_sections"],
             ctx=ctx,
         )
 
@@ -198,7 +197,6 @@ def build_safety_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             warnings=warnings,
             artifacts=artifacts,
             request_id=_request_id(headers) if "headers" in locals() else None,
-            next_recommended_tools=["openfda_faers_aggregate"],
             ctx=ctx,
         )
 

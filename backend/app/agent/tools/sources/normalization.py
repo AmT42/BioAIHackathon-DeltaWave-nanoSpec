@@ -12,7 +12,6 @@ from app.agent.tools.http_client import SimpleHttpClient
 from app.agent.tools.policy import (
     build_pubmed_evidence_queries,
     build_source_query_terms,
-    recommend_initial_tools_for_query,
     should_run_trial_publication_audit,
 )
 from app.agent.tools.registry import ToolSpec
@@ -193,7 +192,6 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             warnings=["No RxNorm match found."] if not candidates else [],
             artifacts=artifact_refs,
             request_id=_request_id(headers),
-            next_recommended_tools=["normalize_drug_related", "normalize_merge_candidates"],
             ctx=ctx,
         )
 
@@ -240,7 +238,6 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             ids=[str(item.get("rxcui")) for item in rows if item.get("rxcui")],
             warnings=warnings,
             artifacts=artifacts,
-            next_recommended_tools=["normalize_merge_candidates", "retrieval_build_query_terms"],
             request_id=_request_id(headers) if "headers" in locals() else None,
             ctx=ctx,
         )
@@ -313,7 +310,6 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             ids=ids,
             artifacts=artifact_refs,
             request_id=_request_id(headers),
-            next_recommended_tools=["normalize_compound_fetch", "normalize_merge_candidates"],
             ctx=ctx,
         )
 
@@ -360,7 +356,6 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             data={"mode": mode, "records": records},
             ids=[str(item.get("cid")) for item in records if item.get("cid")],
             warnings=warnings,
-            next_recommended_tools=["normalize_merge_candidates", "retrieval_build_query_terms"],
             ctx=ctx,
         )
 
@@ -406,7 +401,6 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             ids=[hit.get("obo_id") for hit in hits if hit.get("obo_id")],
             pagination={"next_page_token": str(page + 1) if len(hits) >= limit else None, "has_more": len(hits) >= limit},
             request_id=_request_id(headers),
-            next_recommended_tools=["normalize_ontology_fetch", "normalize_merge_candidates"],
             ctx=ctx,
         )
 
@@ -482,7 +476,6 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             ids=[term.get("obo_id") for term in terms if term.get("obo_id")],
             warnings=warnings,
             request_id=_request_id(request_headers),
-            next_recommended_tools=["normalize_merge_candidates", "retrieval_build_query_terms"],
             ctx=ctx,
         )
 
@@ -582,7 +575,6 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             "synonyms": deduped,
             "xrefs": xrefs,
             "warnings": warnings,
-            "recommended_initial_tools": recommend_initial_tools_for_query(user_text),
         }
 
         return make_tool_output(
@@ -592,7 +584,6 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             data={"concept": concept},
             ids=[str(pivot.get("id"))],
             warnings=warnings,
-            next_recommended_tools=["retrieval_build_query_terms", "retrieval_build_pubmed_templates"],
             ctx=ctx,
         )
 
@@ -623,7 +614,6 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             result_kind="document",
             data={"label": label, "mode": mode, "terms": source_terms},
             ids=source_terms.get("pubmed", []),
-            next_recommended_tools=["retrieval_build_pubmed_templates", "pubmed_search", "clinicaltrials_search"],
             ctx=ctx,
         )
 
@@ -651,7 +641,6 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             result_kind="document",
             data={"queries": queries},
             ids=["systematic_reviews", "rcts", "observational", "broad"],
-            next_recommended_tools=["pubmed_search"],
             ctx=ctx,
         )
 
@@ -667,7 +656,6 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             result_kind="status",
             data={"should_run": run_audit},
             ids=[],
-            next_recommended_tools=["trial_publication_linker"] if run_audit else [],
             ctx=ctx,
         )
 

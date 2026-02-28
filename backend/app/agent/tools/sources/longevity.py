@@ -219,7 +219,6 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
                     },
                     ids=[str(stale)],
                     warnings=["Refresh failed; served stale cache snapshot.", f"Last refresh error: {last_error or 'unknown'}"],
-                    next_recommended_tools=["longevity_drugage_query"],
                     ctx=ctx,
                 )
             raise ToolExecutionError(
@@ -247,7 +246,6 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             },
             ids=[str(saved_path)],
             artifacts=artifacts,
-            next_recommended_tools=["longevity_drugage_query"],
             ctx=ctx,
         )
 
@@ -330,7 +328,6 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             },
             ids=[entry.get("reference") for entry in matches if entry.get("reference")],
             warnings=["No matching rows found."] if not matches else [],
-            next_recommended_tools=["pubmed_fetch"],
             ctx=ctx,
         )
 
@@ -462,7 +459,6 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             ids=[record.get("url") for record in records if record.get("url")],
             warnings=warnings,
             artifacts=artifacts,
-            next_recommended_tools=["pubmed_search"],
             ctx=ctx,
         )
 

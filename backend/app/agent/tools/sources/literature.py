@@ -201,7 +201,6 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
             artifacts=artifact_refs,
             pagination={"next_page_token": str(next_offset) if has_more else None, "has_more": has_more},
             request_id=_request_id(headers),
-            next_recommended_tools=["pubmed_fetch"],
             ctx=ctx,
         )
 
@@ -289,7 +288,6 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
             citations=[{"pmid": rec.get("pmid"), "doi": rec.get("doi"), "title": rec.get("title"), "year": rec.get("pubdate")} for rec in records],
             artifacts=artifacts,
             request_id=_request_id(headers),
-            next_recommended_tools=["clinicaltrials_search", "trial_publication_linker"],
             ctx=ctx,
         )
 
@@ -351,7 +349,6 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
             request_id=_request_id(headers),
             auth_required=True,
             auth_configured=bool(settings.openalex_api_key),
-            next_recommended_tools=["openalex_fetch", "pubmed_fetch"],
             ctx=ctx,
         )
 
@@ -400,7 +397,6 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
             request_id=_request_id(headers) if "headers" in locals() else None,
             auth_required=True,
             auth_configured=bool(settings.openalex_api_key),
-            next_recommended_tools=["pubmed_fetch"],
             ctx=ctx,
         )
 

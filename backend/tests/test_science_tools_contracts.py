@@ -68,7 +68,6 @@ def test_tool_output_contract_v2_shape(tmp_path: Path) -> None:
         "artifacts",
         "pagination",
         "source_meta",
-        "guidance",
     ]:
         assert key in output
 
@@ -78,9 +77,7 @@ def test_tool_output_contract_v2_shape(tmp_path: Path) -> None:
     assert "auth" in output["source_meta"]
     assert isinstance(output["source_meta"]["auth"].get("required"), bool)
     assert isinstance(output["source_meta"]["auth"].get("configured"), bool)
-
-    assert "next_recommended_tools" in output["guidance"]
-    assert isinstance(output["guidance"]["next_recommended_tools"], list)
+    assert "guidance" not in output
 
     err = registry.execute("missing_tool", {}, ctx=ctx)
     assert err["status"] == "error"

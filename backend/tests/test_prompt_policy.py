@@ -7,8 +7,8 @@ def test_master_prompt_contains_required_policy_sections() -> None:
     text = DEFAULT_SYSTEM_PROMPT
     required_fragments = [
         "Mission:",
-        "Mandatory retrieval order:",
-        "Tool routing by concept type:",
+        "Adaptive retrieval strategy:",
+        "Tool routing heuristics by concept type:",
         "Argument calibration rules:",
         "Source trust hierarchy:",
         "Fallback behavior:",

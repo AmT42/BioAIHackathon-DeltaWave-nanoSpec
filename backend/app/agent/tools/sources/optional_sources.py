@@ -121,7 +121,6 @@ def build_optional_source_tools(settings: Settings, http: SimpleHttpClient) -> l
             result_kind="record_list",
             data={"query": query, "mode": mode, "records": records},
             ids=[record.get("chembl_id") for record in records if record.get("chembl_id")],
-            next_recommended_tools=["chembl_fetch"],
             ctx=ctx,
         )
 
@@ -182,7 +181,6 @@ def build_optional_source_tools(settings: Settings, http: SimpleHttpClient) -> l
             data={"query": query, "mode": mode, "page": page, "records": records},
             ids=[record.get("chebi_id") for record in records if record.get("chebi_id")],
             pagination={"next_page_token": str(page + 1) if has_more else None, "has_more": has_more},
-            next_recommended_tools=["chebi_fetch"],
             ctx=ctx,
         )
 
@@ -258,7 +256,6 @@ def build_optional_source_tools(settings: Settings, http: SimpleHttpClient) -> l
                 }
                 for record in records
             ],
-            next_recommended_tools=["semanticscholar_fetch"],
             ctx=ctx,
         )
 
@@ -342,7 +339,6 @@ def build_optional_source_tools(settings: Settings, http: SimpleHttpClient) -> l
             auth_required=True,
             auth_configured=bool(settings.epistemonikos_api_key),
             pagination={"next_page_token": str(page + 1) if has_more else None, "has_more": has_more},
-            next_recommended_tools=["epistemonikos_fetch"],
             ctx=ctx,
         )
 
