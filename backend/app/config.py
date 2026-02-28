@@ -56,6 +56,8 @@ class Settings:
     repl_workspace_root: Path
     repl_max_wall_time_seconds: int
     repl_max_stdout_bytes: int
+    repl_stdout_line_soft_limit: int
+    repl_stdout_max_line_artifacts: int
     repl_max_tool_calls_per_exec: int
     repl_session_ttl_seconds: int
     repl_max_sessions: int
@@ -241,6 +243,8 @@ def get_settings() -> Settings:
         repl_workspace_root=workspace_root,
         repl_max_wall_time_seconds=int(_env_int("REPL_MAX_WALL_TIME_SECONDS", default=120) or 120),
         repl_max_stdout_bytes=int(_env_int("REPL_MAX_STDOUT_BYTES", default=65536) or 65536),
+        repl_stdout_line_soft_limit=int(_env_int("REPL_STDOUT_LINE_SOFT_LIMIT", default=500) or 500),
+        repl_stdout_max_line_artifacts=int(_env_int("REPL_STDOUT_MAX_LINE_ARTIFACTS", default=12) or 12),
         repl_max_tool_calls_per_exec=int(_env_int("REPL_MAX_TOOL_CALLS_PER_EXEC", default=200) or 200),
         repl_session_ttl_seconds=int(_env_int("REPL_SESSION_TTL_SECONDS", default=86_400) or 86_400),
         repl_max_sessions=int(_env_int("REPL_MAX_SESSIONS", default=500) or 500),

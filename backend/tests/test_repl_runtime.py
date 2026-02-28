@@ -327,6 +327,59 @@ def test_repl_warns_when_no_print_output() -> None:
     assert "no visible output" in out.stdout.lower()
 
 
+def test_repl_warns_when_print_exists_but_never_executes() -> None:
+    runtime = _runtime()
+
+    out = runtime.execute(
+        thread_id="thread-c2",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code="for _ in []:\n    print('x')",
+    )
+
+    assert out.error is None
+    assert out.had_visible_output is False
+    lowered = out.stdout.lower()
+    assert "no visible output" in lowered
+    assert "includes print" in lowered
+    assert "empty loops" in lowered
+
+
+def test_repl_caps_long_printed_line_and_writes_artifact(tmp_path: Path) -> None:
+    runtime = _runtime(
+        artifact_root=tmp_path,
+        stdout_soft_line_limit=120,
+        stdout_max_line_artifacts=5,
+    )
+
+    out = runtime.execute(
+        thread_id="thread-cap",
+        run_id="run-cap",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-cap-1",
+        code="print('X' * 400)",
+    )
+
+    assert out.error is None
+    assert out.had_visible_output is True
+    assert "stdout line capped at 120 chars" in out.stdout
+    assert out.stdout_capping is not None
+    assert out.stdout_capping.get("lines_capped") == 1
+    assert out.artifacts
+    artifact_path = Path(str(out.artifacts[0].get("path") or ""))
+    assert artifact_path.exists()
+    assert "repl_stdout" in str(artifact_path)
+    artifact_text = artifact_path.read_text(encoding="utf-8")
+    assert "REPL Stdout Full Line" in artifact_text
+    assert "X" * 200 in artifact_text
+    tool_payload = out.to_tool_output()["output"]
+    assert isinstance(tool_payload.get("artifacts"), list) and tool_payload["artifacts"]
+    assert isinstance(tool_payload.get("stdout_capping"), dict)
+
+
 def test_repl_supports_dir_and_safe_json_import() -> None:
     runtime = _runtime()
 
@@ -390,6 +443,23 @@ def test_repl_bash_helper_redirects_to_bash_exec() -> None:
 
     assert out.error is not None
     assert "bash_exec" in out.stderr
+
+
+def test_repl_bash_exec_symbol_is_bound_with_clear_guidance() -> None:
+    runtime = _runtime()
+
+    out = runtime.execute(
+        thread_id="thread-f2",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code="bash_exec('pwd')",
+    )
+
+    assert out.error is not None
+    assert "cannot be called from inside repl_exec" in out.stderr.lower()
+    assert "top-level tool call" in out.stderr.lower()
 
 
 def test_execute_bash_runs_command_outside_repl() -> None:
@@ -606,6 +676,7 @@ def test_repl_runtime_info_and_help_examples_helpers_available() -> None:
             "info = runtime_info()\n"
             "print('workspace_root' in info)\n"
             "print('help_examples' in info['helpers'])\n"
+            "print('installed_packages' in info['helpers'])\n"
             "print('shell_policy_mode' in info)\n"
             "print('execution_limits' in info)\n"
             "ex = help_examples('longevity')\n"
@@ -621,8 +692,40 @@ def test_repl_runtime_info_and_help_examples_helpers_available() -> None:
 
     assert out.error is None
     lines = [line.strip() for line in out.stdout.splitlines() if line.strip()]
-    assert lines[:8] == ["True", "True", "True", "True", "longevity", "True", "shell_vs_repl", "True"]
-    assert lines[8:] == ["True", "True"]
+    assert lines[:9] == [
+        "True",
+        "True",
+        "True",
+        "True",
+        "True",
+        "longevity",
+        "True",
+        "shell_vs_repl",
+        "True",
+    ]
+    assert lines[9:] == ["True", "True"]
+
+
+def test_repl_installed_packages_helper_returns_items() -> None:
+    runtime = _runtime()
+
+    out = runtime.execute(
+        thread_id="thread-n2",
+        run_id="run-1",
+        request_index=1,
+        user_msg_index=1,
+        execution_id="repl-1",
+        code=(
+            "pkgs = installed_packages(limit=5)\n"
+            "print('items' in pkgs)\n"
+            "print(isinstance(pkgs.get('items'), list))\n"
+            "print('count' in pkgs)\n"
+            "print(len(pkgs.get('items', [])) <= 5)"
+        ),
+    )
+
+    assert out.error is None
+    assert "True\nTrue\nTrue\nTrue" in out.stdout
 
 
 def test_repl_coerces_query_terms_from_merge_handle() -> None:

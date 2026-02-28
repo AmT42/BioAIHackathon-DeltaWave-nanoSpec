@@ -58,6 +58,7 @@ async def test_core_uses_runtime_system_prompt_for_messages_and_provider_call() 
     first_call = provider.calls[0]
     system_prompt = str(first_call.get("system_prompt") or "")
     assert "Runtime Environment Brief" in system_prompt
+    assert "installed_packages(limit=200)" in system_prompt
     messages = first_call.get("messages")
     assert isinstance(messages, list) and messages
     first_message = messages[0] if isinstance(messages[0], dict) else {}

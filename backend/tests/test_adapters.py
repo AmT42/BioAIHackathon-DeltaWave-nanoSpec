@@ -185,6 +185,16 @@ def test_build_gemini_messages_compacts_repl_tool_output_for_model() -> None:
                     "stdout": "value",
                     "stderr": "",
                     "env": {"after": {"items": [{"name": "secret", "preview": "[REDACTED]"}]}},
+                    "stdout_capping": {"line_soft_limit": 500, "lines_capped": 1},
+                    "artifacts": [
+                        {
+                            "kind": "repl_stdout_full_line",
+                            "name": "line-0001.md",
+                            "path": "/tmp/repl_stdout/line-0001.md",
+                            "line_number": 1,
+                            "chars": 2048,
+                        }
+                    ],
                 },
             },
             tool_call_id="repl_1",
@@ -196,3 +206,5 @@ def test_build_gemini_messages_compacts_repl_tool_output_for_model() -> None:
     assert "summary" in str(tool_message.get("content") or "")
     assert "stdout" in str(tool_message.get("content") or "")
     assert "env" not in str(tool_message.get("content") or "")
+    assert "artifacts" in str(tool_message.get("content") or "")
+    assert "stdout_capping" in str(tool_message.get("content") or "")

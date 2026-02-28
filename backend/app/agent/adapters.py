@@ -33,6 +33,19 @@ def _compact_tool_payload_for_model(tool_name: str, payload: Any) -> Any:
         return payload
     normalized_tool = str(tool_name or "").strip().lower()
     if normalized_tool == "repl_exec":
+        artifacts: list[dict[str, Any]] = []
+        for raw_item in list(payload.get("artifacts") or [])[:8]:
+            if not isinstance(raw_item, dict):
+                continue
+            artifacts.append(
+                {
+                    "kind": raw_item.get("kind"),
+                    "name": raw_item.get("name"),
+                    "path": _truncate_text(raw_item.get("path"), max_chars=240),
+                    "line_number": raw_item.get("line_number"),
+                    "chars": raw_item.get("chars"),
+                }
+            )
         return {
             "summary": payload.get("summary"),
             "stdout": _truncate_text(payload.get("stdout")),
@@ -40,6 +53,8 @@ def _compact_tool_payload_for_model(tool_name: str, payload: Any) -> Any:
             "had_visible_output": payload.get("had_visible_output"),
             "nested_tool_calls": payload.get("nested_tool_calls"),
             "truncated": payload.get("truncated"),
+            "stdout_capping": payload.get("stdout_capping"),
+            "artifacts": artifacts,
         }
     if normalized_tool == "bash_exec":
         return {
