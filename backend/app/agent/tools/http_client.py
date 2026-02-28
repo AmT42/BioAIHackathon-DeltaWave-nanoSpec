@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import random
 import time
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib import parse, request
 from urllib.error import HTTPError, URLError
@@ -29,6 +31,37 @@ class SimpleHttpClient:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.user_agent = user_agent
+
+    def _retry_after_seconds(self, headers: dict[str, Any] | None) -> float | None:
+        if not headers:
+            return None
+        raw = None
+        for key in ("retry-after", "Retry-After"):
+            if key in headers:
+                raw = headers.get(key)
+                break
+        if raw is None:
+            return None
+        text = str(raw).strip()
+        if not text:
+            return None
+        try:
+            return max(float(text), 0.0)
+        except Exception:
+            pass
+        try:
+            dt = parsedate_to_datetime(text)
+            now = time.time()
+            return max(dt.timestamp() - now, 0.0)
+        except Exception:
+            return None
+
+    def _backoff_seconds(self, *, attempt: int, retry_after_seconds: float | None = None) -> float:
+        if retry_after_seconds is not None:
+            # Add small jitter to avoid synchronized retries.
+            return max(0.0, retry_after_seconds + random.uniform(0.0, 0.25))
+        base = min(0.5 * (2**attempt), 8.0)
+        return base + random.uniform(0.0, 0.25)
 
     def _build_url(self, url: str, params: dict[str, Any] | None = None) -> str:
         if not params:
@@ -61,8 +94,15 @@ class SimpleHttpClient:
             req_headers["Content-Type"] = "application/json"
 
         last_exc: Exception | None = None
+        last_retry_meta: dict[str, Any] = {
+            "attempts": 0,
+            "retry_count": 0,
+            "delays_seconds": [],
+            "retry_after_seconds": None,
+        }
         for attempt in range(self.max_retries + 1):
             try:
+                last_retry_meta["attempts"] = attempt + 1
                 req = request.Request(full_url, headers=req_headers, data=body, method=method.upper())
                 with request.urlopen(req, timeout=self.timeout_seconds) as resp:
                     response_headers = {k.lower(): v for k, v in dict(resp.headers).items()}
@@ -74,8 +114,15 @@ class SimpleHttpClient:
                     )
             except HTTPError as exc:
                 retryable = exc.code in {408, 409, 425, 429, 500, 502, 503, 504}
+                err_headers = dict(exc.headers or {})
+                retry_after = self._retry_after_seconds(err_headers)
+                if retry_after is not None:
+                    last_retry_meta["retry_after_seconds"] = retry_after
                 if retryable and attempt < self.max_retries:
-                    time.sleep(min(0.5 * (attempt + 1), 1.5))
+                    delay = self._backoff_seconds(attempt=attempt, retry_after_seconds=retry_after)
+                    last_retry_meta["retry_count"] = int(last_retry_meta["retry_count"]) + 1
+                    last_retry_meta["delays_seconds"].append(round(delay, 3))
+                    time.sleep(delay)
                     continue
                 if exc.code == 404:
                     raise ToolExecutionError(code="NOT_FOUND", message=f"Upstream resource not found: {full_url}") from exc
@@ -84,29 +131,37 @@ class SimpleHttpClient:
                         code="RATE_LIMIT",
                         message=f"Rate limited by upstream source: {full_url}",
                         retryable=True,
+                        details={
+                            "url": full_url,
+                            "status_code": 429,
+                            "retry": last_retry_meta,
+                        },
                     ) from exc
                 raise ToolExecutionError(
                     code="UPSTREAM_ERROR",
                     message=f"HTTP {exc.code} from upstream source",
                     retryable=retryable,
-                    details={"url": full_url},
+                    details={"url": full_url, "status_code": exc.code, "retry": last_retry_meta},
                 ) from exc
             except URLError as exc:
                 last_exc = exc
                 if attempt < self.max_retries:
-                    time.sleep(min(0.5 * (attempt + 1), 1.5))
+                    delay = self._backoff_seconds(attempt=attempt)
+                    last_retry_meta["retry_count"] = int(last_retry_meta["retry_count"]) + 1
+                    last_retry_meta["delays_seconds"].append(round(delay, 3))
+                    time.sleep(delay)
                     continue
                 raise ToolExecutionError(
                     code="UPSTREAM_ERROR",
                     message="Network error while contacting upstream source",
                     retryable=True,
-                    details={"url": full_url},
+                    details={"url": full_url, "retry": last_retry_meta},
                 ) from exc
 
         raise ToolExecutionError(
             code="UPSTREAM_ERROR",
             message="Unexpected HTTP client failure",
-            details={"url": full_url, "last_error": str(last_exc) if last_exc else None},
+            details={"url": full_url, "last_error": str(last_exc) if last_exc else None, "retry": last_retry_meta},
         )
 
     def get_json(

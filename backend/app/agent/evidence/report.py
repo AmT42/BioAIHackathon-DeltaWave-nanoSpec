@@ -2,102 +2,106 @@ from __future__ import annotations
 
 from typing import Any
 
-
-def _format_counts_by_level(records: list[dict[str, Any]]) -> dict[int, int]:
-    counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0}
-    for record in records:
-        level = int(record.get("evidence_level") or 0)
-        if level in counts:
-            counts[level] += 1
-    return counts
-
-
-def render_report_markdown(
-    *,
-    concept: dict[str, Any] | None,
-    claim_context: dict[str, Any],
-    ledger: dict[str, Any],
-    score: dict[str, Any],
-    gap_map: dict[str, Any],
-) -> str:
-    records = [item for item in (ledger.get("records") or []) if isinstance(item, dict)]
-    counts = _format_counts_by_level(records)
-
-    concept_label = ((concept or {}).get("label") if isinstance(concept, dict) else None) or claim_context.get("intervention")
-
-    lines: list[str] = []
-    lines.append(f"# Evidence Report: {concept_label}")
-    lines.append("")
-    lines.append("## Claim Context")
-    lines.append(f"- Intervention: {claim_context.get('intervention')}")
-    lines.append(f"- Population: {claim_context.get('population')}")
-    lines.append(f"- Outcome: {claim_context.get('outcome')}")
-    lines.append(f"- Comparator: {claim_context.get('comparator')}")
-    if claim_context.get("directness_warnings"):
-        lines.append(f"- Directness warnings: {', '.join(claim_context.get('directness_warnings') or [])}")
-
-    lines.append("")
-    lines.append("## Scores")
-    lines.append(f"- CES: {score.get('ces')}")
-    lines.append(f"- MP: {score.get('mp')}")
-    lines.append(f"- Final confidence: {score.get('final_confidence')}")
-    if score.get("caps_applied"):
-        cap_labels = [str(item.get("cap")) for item in score.get("caps_applied") or []]
-        lines.append(f"- Caps applied: {', '.join(cap_labels)}")
-
-    lines.append("")
-    lines.append("## Evidence Pyramid")
-    lines.append("| Level | Count |")
-    lines.append("|---|---:|")
-    for level in [1, 2, 3, 4, 5, 6]:
-        lines.append(f"| {level} | {counts[level]} |")
-
-    lines.append("")
-    lines.append("## Key Gaps")
-    for item in gap_map.get("missing_evidence") or []:
-        lines.append(f"- {item}")
-
-    lines.append("")
-    lines.append("## What Would Change The Score")
-    for item in gap_map.get("what_would_change_score") or []:
-        lines.append(f"- {item}")
-
-    lines.append("")
-    lines.append("## Top Evidence Items")
-    top = sorted(
-        records,
-        key=lambda item: (int(item.get("evidence_level") or 99), str(item.get("title") or "")),
-    )[:12]
-    for item in top:
-        ids = item.get("ids") or {}
-        refs = [f"PMID:{ids.get('pmid')}" if ids.get("pmid") else "", f"NCT:{ids.get('nct')}" if ids.get("nct") else ""]
-        ref_text = ", ".join(part for part in refs if part)
-        lines.append(
-            f"- L{item.get('evidence_level')} | {item.get('study_type')} | {item.get('title') or 'Untitled'}"
-            + (f" ({ref_text})" if ref_text else "")
-        )
-
-    return "\n".join(lines).strip() + "\n"
+from app.agent.evidence.models import ClaimContext, EvidenceGrade, EvidenceLedger
 
 
 def render_report_json(
     *,
-    concept: dict[str, Any] | None,
-    claim_context: dict[str, Any],
-    ledger: dict[str, Any],
-    score: dict[str, Any],
+    intervention: dict[str, Any],
+    ledger: EvidenceLedger,
+    grade: EvidenceGrade,
     gap_map: dict[str, Any],
+    claim_context: ClaimContext | None = None,
 ) -> dict[str, Any]:
-    return {
-        "intervention": concept or {"label": claim_context.get("intervention")},
-        "claim_context": claim_context,
-        "evidence_summary": {
-            "ces": score.get("ces"),
-            "mp": score.get("mp"),
-            "final_confidence": score.get("final_confidence"),
-            "caps_applied": score.get("caps_applied") or [],
-        },
-        "ledger": ledger,
-        "score": score,
-        "gaps": gap_map,
+    counts_by_level = dict(ledger.counts_by_level)
+    evidence_pyramid = {
+        "level_1": counts_by_level.get("1", 0),
+        "level_2": counts_by_level.get("2", 0),
+        "level_3": counts_by_level.get("3", 0),
+        "level_4": counts_by_level.get("4", 0),
+        "level_5": counts_by_level.get("5", 0),
+        "level_6": counts_by_level.get("6", 0),
     }
+
+    top_records: list[dict[str, Any]] = []
+    for record in ledger.records[:20]:
+        top_records.append(
+            {
+                "study_key": record.study_key,
+                "source": record.source,
+                "title": record.title,
+                "year": record.year,
+                "evidence_level": record.evidence_level,
+                "study_type": record.study_type,
+                "population_class": record.population_class,
+                "endpoint_class": record.endpoint_class,
+                "effect_direction": record.effect_direction,
+                "quality_flags": list(record.quality_flags),
+                "directness_flags": list(record.directness_flags),
+                "ids": dict(record.ids),
+                "citations": list(record.citations),
+            }
+        )
+
+    return {
+        "intervention": intervention,
+        "claim_context": claim_context.to_dict() if claim_context else None,
+        "evidence_summary": {
+            "score": grade.score,
+            "label": grade.label,
+            "confidence": grade.confidence,
+            "notes": list(grade.notes),
+        },
+        "evidence_pyramid": evidence_pyramid,
+        "counts_by_source": dict(ledger.counts_by_source),
+        "counts_by_endpoint": dict(ledger.counts_by_endpoint),
+        "scoring_trace": grade.trace.to_dict(),
+        "coverage_gaps": list(ledger.coverage_gaps),
+        "gap_map": gap_map,
+        "records": top_records,
+        "optional_source_status": list(ledger.optional_source_status),
+    }
+
+
+def render_report_markdown(report_json: dict[str, Any]) -> str:
+    intervention = report_json.get("intervention") or {}
+    summary = report_json.get("evidence_summary") or {}
+    pyramid = report_json.get("evidence_pyramid") or {}
+    gap_map = report_json.get("gap_map") or {}
+
+    lines = [
+        f"# Evidence Report: {intervention.get('label') or 'Intervention'}",
+        "",
+        f"- Type: {intervention.get('type') or 'unknown'}",
+        f"- Pivot: {intervention.get('pivot') or {}}",
+        f"- Confidence score: {summary.get('score')} ({summary.get('label')}, {summary.get('confidence')})",
+        "",
+        "## Evidence Pyramid",
+        f"- Level 1 (systematic/meta): {pyramid.get('level_1', 0)}",
+        f"- Level 2 (RCT): {pyramid.get('level_2', 0)}",
+        f"- Level 3 (observational): {pyramid.get('level_3', 0)}",
+        f"- Level 4 (animal): {pyramid.get('level_4', 0)}",
+        f"- Level 5 (in vitro): {pyramid.get('level_5', 0)}",
+        f"- Level 6 (in silico): {pyramid.get('level_6', 0)}",
+        "",
+        "## Main Gaps",
+    ]
+
+    for item in (gap_map.get("missing_levels") or [])[:6]:
+        lines.append(f"- {item}")
+    for item in (gap_map.get("missing_endpoints") or [])[:6]:
+        lines.append(f"- {item}")
+
+    next_steps = gap_map.get("next_best_studies") or []
+    if next_steps:
+        lines.extend(["", "## What Would Raise Confidence"]) 
+        for item in next_steps[:6]:
+            lines.append(f"- {item}")
+
+    notes = summary.get("notes") or []
+    if notes:
+        lines.extend(["", "## Notes"])
+        for note in notes[:6]:
+            lines.append(f"- {note}")
+
+    return "\n".join(lines).strip() + "\n"

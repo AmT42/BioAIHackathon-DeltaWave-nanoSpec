@@ -46,22 +46,12 @@ _SURROGATE_MARKERS = [
     "metabolomic",
     "sasp",
     "nad+",
-    "nad",
 ]
 
-_MECHANISTIC_MARKERS = [
-    "mtor",
-    "ampk",
-    "igf",
-    "autophagy",
-    "senescence",
-    "epigenetic",
-    "mitochond",
-    "proteostasis",
-    "telomere",
-    "genomic instability",
-    "in silico",
-]
+_ACRONYM_WITH_CONTEXT: dict[str, list[str]] = {
+    "nad": ["nicotinamide", "adenine", "dinucleotide", "metabolism", "redox", "precursor"],
+    "nr": ["nicotinamide", "riboside", "nad", "precursor"],
+}
 
 _IN_SILICO_MARKERS = ["in silico", "computational", "network pharmacology", "simulation", "docking", "modeling"]
 _IN_VITRO_MARKERS = ["in vitro", "cell line", "cellular", "organoid"]
@@ -83,8 +73,34 @@ def _normalize_text(parts: list[str]) -> str:
     return " ".join(str(p or "") for p in parts).strip().lower()
 
 
+def _contains_term(text: str, needle: str) -> bool:
+    candidate = str(needle or "").strip().lower()
+    if not candidate:
+        return False
+
+    # Use word boundaries for short alphanumeric tokens to avoid false positives
+    # like "canada" -> "nad".
+    if " " not in candidate and re.fullmatch(r"[a-z0-9\+\-]+", candidate):
+        pattern = rf"(?<![a-z0-9]){re.escape(candidate)}(?![a-z0-9])"
+        return re.search(pattern, text) is not None
+
+    return candidate in text
+
+
 def _has_any(text: str, needles: list[str]) -> bool:
-    return any(needle in text for needle in needles)
+    return any(_contains_term(text, needle) for needle in needles)
+
+
+def _acronym_is_disambiguated(text: str, acronym: str) -> bool:
+    if not _contains_term(text, acronym):
+        return False
+    return _has_any(text, _ACRONYM_WITH_CONTEXT.get(acronym, []))
+
+
+def _is_surrogate_endpoint(text: str) -> bool:
+    if _has_any(text, _SURROGATE_MARKERS):
+        return True
+    return _acronym_is_disambiguated(text, "nad") or _acronym_is_disambiguated(text, "nr")
 
 
 def extract_hallmark_tags(text: str) -> list[str]:
@@ -100,7 +116,7 @@ def classify_endpoint_class(text: str) -> str:
         return "clinical_hard"
     if _has_any(text, _INTERMEDIATE_MARKERS):
         return "clinical_intermediate"
-    if _has_any(text, _SURROGATE_MARKERS):
+    if _is_surrogate_endpoint(text):
         return "surrogate_biomarker"
     return "mechanistic_only"
 
@@ -113,7 +129,7 @@ def _study_type_from_pub_types(pub_types: list[str], text: str) -> str:
         return "rct"
     if any("clinical trial" in pt for pt in pts):
         return "clinical_trial"
-    if any("cohort" in text for _ in [0]):
+    if _contains_term(text, "cohort") or _contains_term(text, "observational"):
         return "observational"
     if _has_any(text, _IN_VITRO_MARKERS):
         return "in_vitro"
@@ -129,18 +145,34 @@ def classify_pubmed_record(record: dict[str, Any], claim_context: ClaimContext |
     mesh_terms = [str(item or "") for item in (record.get("mesh_terms") or [])]
     mesh_text = _normalize_text(mesh_terms)
 
-    pub_types = [str(item or "") for item in (record.get("pub_types") or record.get("publication_types") or [])]
+    pub_types = [
+        str(item or "")
+        for item in (record.get("pub_types") or record.get("publication_types") or record.get("pubtype") or [])
+    ]
     study_type = _study_type_from_pub_types(pub_types, text)
 
-    humans = "human" in mesh_text or "humans" in mesh_text
-    animals = "animal" in mesh_text or "animals" in mesh_text
+    humans = bool(record.get("humans")) or _contains_term(mesh_text, "humans") or _contains_term(mesh_text, "human")
+    animals = bool(record.get("animals")) or _contains_term(mesh_text, "animals") or _contains_term(mesh_text, "animal")
     in_vitro = _has_any(text + " " + mesh_text, _IN_VITRO_MARKERS)
     in_silico = _has_any(text + " " + mesh_text, _IN_SILICO_MARKERS)
 
+    quality_flags: list[str] = []
+
     if study_type == "meta_analysis":
         evidence_level = 1
-    elif study_type in {"rct", "clinical_trial"} and humans:
-        evidence_level = 2
+    elif study_type in {"rct", "clinical_trial"}:
+        if animals or in_vitro or in_silico:
+            # Preserve explicit non-human evidence tiers when clearly preclinical/computational.
+            if animals:
+                evidence_level = 4
+            elif in_vitro:
+                evidence_level = 5
+            else:
+                evidence_level = 6
+        else:
+            evidence_level = 2
+            if not humans:
+                quality_flags.append("population_unspecified")
     elif humans:
         evidence_level = 3
     elif animals:
@@ -165,7 +197,6 @@ def classify_pubmed_record(record: dict[str, Any], claim_context: ClaimContext |
 
     endpoint_class = classify_endpoint_class(text)
 
-    quality_flags: list[str] = []
     if evidence_level in {2, 3} and not abstract:
         quality_flags.append("limited_metadata")
     if evidence_level == 3:
@@ -192,7 +223,7 @@ def classify_pubmed_record(record: dict[str, Any], claim_context: ClaimContext |
             "doi": str(record.get("doi") or ""),
         },
         "title": title or None,
-        "year": _extract_year(record.get("pubdate") or record.get("year")),
+        "year": _extract_year(record.get("publication_year") or record.get("pub_date") or record.get("pubdate") or record.get("year")),
         "evidence_level": evidence_level,
         "study_type": study_type,
         "population_class": population_class,
@@ -271,6 +302,8 @@ def classify_trial_record(record: dict[str, Any], claim_context: ClaimContext | 
             "primary_completion_date": record.get("primary_completion_date"),
             "completion_date": record.get("completion_date"),
             "results_first_posted_date": record.get("results_first_posted_date"),
+            "eligibility_summary": record.get("eligibility_summary"),
+            "arms_count": record.get("arms_count"),
             "primary_outcomes": outcomes,
             "hallmark_tags": extract_hallmark_tags(text),
         },

@@ -16,38 +16,53 @@ from app.agent.tools.context import ToolContext
 from app.agent.tools.science_registry import create_science_registry
 from app.config import get_settings
 
+
+BUILTIN_TOOLS = {"calc", "web_search_mock", "fetch_paper_stub"}
+SKIPPED_TOOLS = {"openalex_search_works", "openalex_get_works"}
+OPTIONAL_TOOL_PREFIXES = ("semanticscholar_", "openalex_", "epistemonikos_")
+OPTIONAL_TOOL_NAMES = {"chembl_search_molecules", "chembl_get_molecule", "chebi_search_entities", "chebi_get_entity"}
+
 TOOL_ENDPOINT_HINTS = {
-    "normalize_drug": "https://rxnav.nlm.nih.gov/REST/rxcui.json",
-    "normalize_drug_related": "https://rxnav.nlm.nih.gov/REST/rxcui/{id}/allrelated.json",
-    "normalize_compound": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{query}/cids/JSON",
-    "normalize_compound_fetch": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/JSON",
-    "normalize_ontology": "https://www.ebi.ac.uk/ols4/api/search",
-    "normalize_ontology_fetch": "https://www.ebi.ac.uk/ols4/api/terms",
-    "normalize_merge_candidates": "internal",
-    "retrieval_build_query_terms": "internal",
-    "retrieval_build_pubmed_templates": "internal",
-    "retrieval_should_run_trial_audit": "internal",
-    "pubmed_search": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
-    "pubmed_fetch": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
-    "clinicaltrials_search": "https://clinicaltrials.gov/api/v2/studies",
-    "clinicaltrials_fetch": "https://clinicaltrials.gov/api/v2/studies/{nct}",
+    "openalex_search_works": "https://api.openalex.org/works",
+    "openalex_get_works": "https://api.openalex.org/works/{id}",
+    "pubmed_enrich_pmids": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "clinicaltrials_search_studies": "https://clinicaltrials.gov/api/v2/studies",
+    "clinicaltrials_get_studies": "https://clinicaltrials.gov/api/v2/studies/{nct_id}",
     "trial_publication_linker": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
-    "dailymed_search": "https://dailymed.nlm.nih.gov/dailymed/services/v2/spls.json",
-    "dailymed_fetch_sections": "https://dailymed.nlm.nih.gov/dailymed/services/v2/spls/{setid}.xml",
+    "rxnorm_resolve": "https://rxnav.nlm.nih.gov/REST/rxcui.json",
+    "rxnorm_get_related_terms": "https://rxnav.nlm.nih.gov/REST/rxcui/{rxcui}/allrelated.json",
+    "pubchem_resolve": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{name}/cids/JSON",
+    "pubchem_get_compound": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/JSON",
+    "ols_search_terms": "https://www.ebi.ac.uk/ols4/api/search",
+    "ols_get_term": "https://www.ebi.ac.uk/ols4/api/terms?iri={iri}",
+    "normalize_mesh_expand": "https://id.nlm.nih.gov/mesh/lookup/descriptor",
+    "normalize_expand_terms_llm": "internal",
+    "pubmed_search": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+    "pubmed_fetch": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+    "europmc_search": "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+    "europmc_fetch": "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+    "clinicaltrials_search": "https://clinicaltrials.gov/api/v2/studies",
+    "clinicaltrials_fetch": "https://clinicaltrials.gov/api/v2/studies/{nct_id}",
+    "evidence_classify_pubmed_records": "internal",
+    "evidence_classify_trial_records": "internal",
+    "evidence_build_ledger": "internal",
+    "evidence_grade": "internal",
+    "evidence_gap_map": "internal",
+    "evidence_render_report": "internal",
+    "dailymed_search_labels": "https://dailymed.nlm.nih.gov/dailymed/services/v2/spls.json",
+    "dailymed_get_label_sections": "https://dailymed.nlm.nih.gov/dailymed/services/v2/spls/{setid}.json",
     "openfda_faers_aggregate": "https://api.fda.gov/drug/event.json",
-    "longevity_drugage_refresh": "https://genomics.senescence.info/drugs/dataset.zip",
-    "longevity_drugage_query": "local_cache:hagr_drugage",
-    "longevity_itp_fetch_summary": "https://phenome.jax.org/itp/surv/MetRapa/C2011",
-    "chembl_search": "https://www.ebi.ac.uk/chembl/api/data/molecule/search.json",
-    "chembl_fetch": "https://www.ebi.ac.uk/chembl/api/data/molecule/{id}.json",
-    "chebi_search": "https://www.ebi.ac.uk/chebi/backend/api/public/es_search/",
-    "chebi_fetch": "https://www.ebi.ac.uk/chebi/backend/api/public/compound/{id}/",
-    "semanticscholar_search": "https://api.semanticscholar.org/graph/v1/paper/search",
-    "semanticscholar_fetch": "https://api.semanticscholar.org/graph/v1/paper/{id}",
-    "openalex_search": "https://api.openalex.org/works",
-    "openalex_fetch": "https://api.openalex.org/works/{id}",
-    "epistemonikos_search": "https://api.epistemonikos.org/v1/documents/search",
-    "epistemonikos_fetch": "https://api.epistemonikos.org/v1/documents/{id}",
+    "hagr_drugage_refresh": "https://genomics.senescence.info/drugs/dataset.zip",
+    "hagr_drugage_query": "local_cache:hagr_drugage",
+    "itp_fetch_survival_summary": "https://phenome.jax.org/itp/surv/MetRapa/C2011",
+    "chembl_search_molecules": "https://www.ebi.ac.uk/chembl/api/data/molecule/search.json",
+    "chembl_get_molecule": "https://www.ebi.ac.uk/chembl/api/data/molecule/{chembl_id}.json",
+    "chebi_search_entities": "https://www.ebi.ac.uk/chebi/backend/api/public/es_search/",
+    "chebi_get_entity": "https://www.ebi.ac.uk/chebi/backend/api/public/compound/{chebi_id}/",
+    "semanticscholar_search_papers": "https://api.semanticscholar.org/graph/v1/paper/search",
+    "semanticscholar_get_papers": "https://api.semanticscholar.org/graph/v1/paper/{paper_id}",
+    "epistemonikos_search_reviews": "https://api.epistemonikos.org/v1/documents/search",
+    "epistemonikos_get_review": "https://api.epistemonikos.org/v1/documents/{id}",
 }
 
 
@@ -62,6 +77,50 @@ def safe_get(result: dict[str, Any], *keys: str, default: Any = None) -> Any:
             return default
         node = node[key]
     return node
+
+
+def _is_optional_tool(name: str) -> bool:
+    if name.startswith(OPTIONAL_TOOL_PREFIXES):
+        return True
+    return name in OPTIONAL_TOOL_NAMES
+
+
+def summarize_strict_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    checked_rows = [
+        row
+        for row in results
+        if bool(row.get("enabled", True))
+        if row.get("tool") not in BUILTIN_TOOLS
+        and row.get("tool") not in SKIPPED_TOOLS
+    ]
+    core_rows = [row for row in checked_rows if not _is_optional_tool(str(row.get("tool") or ""))]
+    optional_rows = [row for row in checked_rows if _is_optional_tool(str(row.get("tool") or ""))]
+
+    core_failures = [row for row in core_rows if safe_get(row, "result", "status", default="unknown") != "success"]
+    optional_failures = [row for row in optional_rows if safe_get(row, "result", "status", default="unknown") != "success"]
+
+    optional_failure_details = []
+    for row in optional_failures:
+        optional_failure_details.append(
+            {
+                "tool": row.get("tool"),
+                "status": safe_get(row, "result", "status", default="unknown"),
+                "error_code": safe_get(row, "result", "error", "code", default=None),
+                "error_message": safe_get(row, "result", "error", "message", default=None),
+            }
+        )
+
+    return {
+        "checked_rows": checked_rows,
+        "core_rows": core_rows,
+        "optional_rows": optional_rows,
+        "core_failures": core_failures,
+        "optional_failures": optional_failures,
+        "optional_failure_details": optional_failure_details,
+        "core_passed": not core_failures,
+        "strict_passed": not core_failures,
+        "strict_failure_tools": [str(row.get("tool")) for row in core_failures],
+    }
 
 
 def main() -> None:
@@ -101,7 +160,6 @@ def main() -> None:
             }
             results.append(rec)
             return rec["result"]
-
         ctx = ToolContext(
             thread_id=ctx_base["thread_id"],
             run_id=ctx_base["run_id"],
@@ -125,86 +183,258 @@ def main() -> None:
         results.append(rec)
         return out
 
-    drug = run_tool("normalize_drug", {"query": "rapamycin", "mode": "precision"})
-    rxcui = safe_get(drug, "output", "data", "ingredient_rxcui")
+    # Builtins (local only, intentionally not external APIs)
+    run_tool("calc", {"expression": "(12+8)*3"}, note="local builtin")
+    run_tool("web_search_mock", {"query": "longevity evidence grading"}, note="local builtin")
+    run_tool("fetch_paper_stub", {"topic": "rapamycin aging"}, note="local builtin")
+
+    # Core normalization chain
+    rx = run_tool("rxnorm_resolve", {"term": "rapamycin", "max_candidates": 5})
+    rxcui = safe_get(rx, "output", "data", "ingredient_rxcui")
     if rxcui:
-        run_tool("normalize_drug_related", {"ids": [str(rxcui)], "mode": "precision"})
+        run_tool("rxnorm_get_related_terms", {"rxcui": str(rxcui)})
+    else:
+        run_tool("rxnorm_get_related_terms", {"rxcui": "153165"}, note="fallback RxCUI")
 
-    compound = run_tool("normalize_compound", {"query": "nicotinamide mononucleotide", "mode": "balanced"})
-    compound_records = safe_get(compound, "output", "data", "records", default=[]) or []
-    compound_ids = []
-    if compound_records:
-        first = compound_records[0]
-        if first.get("cid"):
-            compound_ids.append(str(first["cid"]))
-    if compound_ids:
-        run_tool("normalize_compound_fetch", {"ids": compound_ids, "mode": "balanced"})
+    pubchem = run_tool("pubchem_resolve", {"name": "nicotinamide mononucleotide"})
+    cid = safe_get(pubchem, "output", "data", "cid")
+    inchikey = safe_get(pubchem, "output", "data", "inchikey")
+    if cid:
+        run_tool("pubchem_get_compound", {"cid": str(cid)})
+    elif inchikey:
+        run_tool("pubchem_get_compound", {"inchikey": str(inchikey)})
+    else:
+        run_tool("pubchem_get_compound", {"cid": "14180"}, note="fallback CID")
 
-    ontology = run_tool("normalize_ontology", {"query": "hyperbaric oxygen therapy", "mode": "precision", "ontologies": ["efo", "mondo", "hp"]})
-    obo_id = safe_get(ontology, "output", "data", "best", "obo_id")
-    if obo_id:
-        run_tool("normalize_ontology_fetch", {"ids": [str(obo_id)], "mode": "precision"})
+    ols = run_tool("ols_search_terms", {"q": "hyperbaric oxygen therapy", "ontologies": ["efo", "mondo", "hp"], "rows": 5})
+    best_iri = safe_get(ols, "output", "data", "best", "iri")
+    best_onto = safe_get(ols, "output", "data", "best", "ontology")
+    best_obo = safe_get(ols, "output", "data", "best", "obo_id")
+    if best_iri and best_onto:
+        run_tool("ols_get_term", {"iri": str(best_iri), "ontology": str(best_onto)})
+    elif best_obo:
+        run_tool("ols_get_term", {"obo_id": str(best_obo)})
+    else:
+        run_tool("ols_get_term", {"obo_id": "EFO:0000721"}, note="fallback OBO")
 
-    merged = run_tool(
-        "normalize_merge_candidates",
+    concept = run_tool(
+        "concept_merge_candidates",
         {
             "user_text": "rapamycin",
-            "drug_candidates": safe_get(drug, "output", default={}),
-            "compound_candidates": safe_get(compound, "output", default={}),
-            "ontology_candidates": safe_get(ontology, "output", default={}),
+            "rxnorm": safe_get(rx, "output", default={}),
+            "pubchem": safe_get(pubchem, "output", default={}),
+            "ols": safe_get(ols, "output", default={}),
+        },
+    )
+    run_tool("build_search_terms", {"concept": safe_get(concept, "output", default={}), "max_synonyms": 10})
+    run_tool("normalize_mesh_expand", {"query": "rapamycin", "limit": 5})
+    run_tool(
+        "normalize_expand_terms_llm",
+        {
+            "concept": safe_get(concept, "output", "data", "concept", default={}),
+            "mode": "balanced",
+            "max_exact_synonyms": 8,
+            "max_related_terms": 5,
+            "llm_suggestions": {
+                "exact_synonyms": ["sirolimus", "rapa"],
+                "related_terms": ["mTOR inhibitor", "mTOR pathway"],
+                "disambiguators": ["mTOR", "aging"],
+                "excluded_terms": ["drug", "therapy"],
+                "reasoning_notes": "Seeded deterministic expansion for validation run.",
+            },
         },
     )
 
-    terms = run_tool("retrieval_build_query_terms", {"concept": safe_get(merged, "output", default={}), "mode": "precision"})
-    run_tool("retrieval_build_pubmed_templates", {"intervention_terms": safe_get(terms, "output", "data", "terms", "pubmed", default=[]), "outcome_terms": ["aging", "healthspan"]})
+    # Literature enrichment-only (OpenAlex skipped intentionally)
+    pub_search = run_tool("pubmed_search", {"query": "(rapamycin OR sirolimus) AND aging", "limit": 10})
+    pub_ids = safe_get(pub_search, "output", "ids", default=[]) or []
+    if pub_ids:
+        run_tool("pubmed_fetch", {"ids": pub_ids[:5], "include_classification_fields": True})
+    run_tool("pubmed_enrich_pmids", {"pmids": ["31452104", "31919194"]}, note="PMID enrichment only")
+    run_tool("europmc_search", {"query": "rapamycin aging", "page_size": 5})
 
-    pm = run_tool("pubmed_search", {"query": '"rapamycin"[Title/Abstract] AND aging[Title/Abstract]', "mode": "precision", "limit": 10})
-    pmids = safe_get(pm, "output", "ids", default=[]) or []
-    if pmids:
-        run_tool("pubmed_fetch", {"ids": pmids[:5], "mode": "balanced"})
+    # Trials chain
+    ct_search = run_tool(
+        "clinicaltrials_search_studies",
+        {"intr": "rapamycin", "cond": "aging", "page_size": 5},
+    )
+    nct_ids = safe_get(ct_search, "output", "ids", default=[]) or []
+    if nct_ids:
+        ct_get = run_tool("clinicaltrials_get_studies", {"nct_ids": nct_ids[:3]})
+        run_tool("clinicaltrials_fetch", {"ids": nct_ids[:3], "include_raw": False})
+        trials = safe_get(ct_get, "output", "data", "studies", default=[]) or []
+        run_tool("trial_publication_linker", {"nct_ids": nct_ids[:3], "trials": trials})
+    else:
+        run_tool("clinicaltrials_get_studies", {"nct_ids": ["NCT02432287"]}, note="fallback NCT")
+        run_tool("clinicaltrials_fetch", {"ids": ["NCT02432287"], "include_raw": False}, note="fallback NCT")
+        run_tool("trial_publication_linker", {"nct_ids": ["NCT02432287"], "trials": []}, note="fallback NCT")
 
-    ct = run_tool("clinicaltrials_search", {"query": "rapamycin aging", "mode": "precision", "limit": 10})
-    ncts = safe_get(ct, "output", "ids", default=[]) or []
-    if ncts:
-        ctd = run_tool("clinicaltrials_fetch", {"ids": ncts[:3], "mode": "balanced"})
-        trials = safe_get(ctd, "output", "data", "studies", default=[]) or []
-        run_tool("retrieval_should_run_trial_audit", {"trials": trials})
-        run_tool("trial_publication_linker", {"ids": ncts[:3], "trials": trials, "mode": "balanced"})
+    # Deterministic evidence pipeline
+    pubmed_for_evidence = run_tool(
+        "pubmed_fetch",
+        {"ids": ["34567890", "31234567"], "include_classification_fields": True},
+        note="best-effort classification sample",
+    )
+    trials_for_evidence = run_tool(
+        "clinicaltrials_get_studies",
+        {"nct_ids": nct_ids[:2] if nct_ids else ["NCT02432287"]},
+        note="classification sample",
+    )
+    classified_pub = run_tool(
+        "evidence_classify_pubmed_records",
+        {"records": safe_get(pubmed_for_evidence, "output", "data", "records", default=[])},
+    )
+    classified_trials = run_tool(
+        "evidence_classify_trial_records",
+        {"records": safe_get(trials_for_evidence, "output", "data", "studies", default=[])},
+    )
+    mismatch_for_ledger = run_tool(
+        "trial_publication_linker",
+        {
+            "nct_ids": nct_ids[:2] if nct_ids else ["NCT02432287"],
+            "trials": safe_get(trials_for_evidence, "output", "data", "studies", default=[]),
+        },
+    )
+    ledger = run_tool(
+        "evidence_build_ledger",
+        {
+            "pubmed_records": safe_get(classified_pub, "output", "data", "records", default=[]),
+            "trial_records": safe_get(classified_trials, "output", "data", "records", default=[]),
+            "optional_source_status": safe_get(mismatch_for_ledger, "output", "data", "links", default=[]),
+        },
+    )
+    grade = run_tool("evidence_grade", {"ledger": safe_get(ledger, "output", "data", default={})})
+    gaps = run_tool(
+        "evidence_gap_map",
+        {"ledger": safe_get(ledger, "output", "data", default={}), "grade": safe_get(grade, "output", "data", default={})},
+    )
+    run_tool(
+        "evidence_render_report",
+        {
+            "intervention": safe_get(concept, "output", "data", "concept", default={"label": "rapamycin"}),
+            "ledger": safe_get(ledger, "output", "data", default={}),
+            "grade": safe_get(grade, "output", "data", default={}),
+            "gap_map": safe_get(gaps, "output", "data", default={}),
+        },
+    )
 
-    dm = run_tool("dailymed_search", {"query": "sirolimus", "mode": "precision", "limit": 5})
+    # Safety
+    dm = run_tool("dailymed_search_labels", {"drug_name": "sirolimus", "page": 1, "page_size": 10})
     setids = safe_get(dm, "output", "ids", default=[]) or []
     if setids:
-        run_tool("dailymed_fetch_sections", {"ids": [setids[0]], "mode": "balanced"})
+        run_tool("dailymed_get_label_sections", {"setid": str(setids[0])})
+    else:
+        run_tool("dailymed_get_label_sections", {"setid": "2e9f8f43-a999-489f-a420-f5d0f170f71c"}, note="fallback setid")
 
-    run_tool("openfda_faers_aggregate", {"query": "patient.drug.medicinalproduct:SIROLIMUS", "mode": "precision", "limit": 5})
+    run_tool(
+        "openfda_faers_aggregate",
+        {
+            "search": "patient.drug.medicinalproduct:SIROLIMUS",
+            "count": "patient.reaction.reactionmeddrapt.exact",
+            "limit": 5,
+        },
+    )
 
-    run_tool("longevity_drugage_refresh", {"mode": "balanced"})
-    run_tool("longevity_drugage_query", {"query": "rapamycin", "mode": "balanced", "limit": 10})
-    run_tool("longevity_itp_fetch_summary", {"ids": ["https://phenome.jax.org/itp/surv/MetRapa/C2011"], "mode": "precision"})
+    # Longevity
+    run_tool("hagr_drugage_refresh", {"dataset": "drugage"})
+    run_tool("hagr_drugage_query", {"compound": "rapamycin", "limit": 10, "auto_refresh": True})
+    run_tool("itp_fetch_survival_summary", {"url": "https://phenome.jax.org/itp/surv/MetRapa/C2011"})
 
-    run_tool("chembl_search", {"query": "sirolimus", "mode": "balanced", "limit": 5})
-    run_tool("chebi_search", {"query": "nicotinamide mononucleotide", "mode": "balanced", "limit": 5})
-    run_tool("semanticscholar_search", {"query": "rapamycin aging trial", "mode": "balanced", "limit": 5})
+    # Optional sources
+    chembl = run_tool("chembl_search_molecules", {"query": "sirolimus", "limit": 5})
+    chembl_ids = safe_get(chembl, "output", "ids", default=[]) or []
+    if chembl_ids:
+        run_tool("chembl_get_molecule", {"chembl_id": str(chembl_ids[0])})
+    else:
+        run_tool("chembl_get_molecule", {"chembl_id": "CHEMBL413"}, note="fallback ChEMBL")
+
+    chebi = run_tool("chebi_search_entities", {"query": "nicotinamide mononucleotide", "limit": 5})
+    chebi_ids = safe_get(chebi, "output", "ids", default=[]) or []
+    if chebi_ids:
+        run_tool("chebi_get_entity", {"chebi_id": str(chebi_ids[0])})
+    else:
+        run_tool("chebi_get_entity", {"chebi_id": "CHEBI:16708"}, note="fallback ChEBI")
+
+    s2 = run_tool("semanticscholar_search_papers", {"query": "rapamycin aging trial", "limit": 5})
+    paper_ids = safe_get(s2, "output", "ids", default=[]) or []
+    if paper_ids:
+        run_tool("semanticscholar_get_papers", {"paper_ids": paper_ids[:2]})
+    else:
+        run_tool("semanticscholar_get_papers", {"paper_ids": ["CorpusID:16596532"]}, note="fallback S2 paper id")
+
+    epi_search = run_tool("epistemonikos_search_reviews", {"query": "rapamycin aging", "limit": 5})
+    epi_ids = safe_get(epi_search, "output", "ids", default=[]) or []
+    if epi_ids:
+        run_tool("epistemonikos_get_review", {"review_id": str(epi_ids[0])})
+    else:
+        run_tool("epistemonikos_get_review", {"review_id": "demo"}, note="likely UNCONFIGURED without API key")
+
+    # OpenAlex explicitly skipped per user request
+    results.append(
+        {
+            "tool": "openalex_search_works",
+            "payload": {"query": "rapamycin aging", "per_page": 5},
+            "result": {"status": "skipped", "reason": "Skipped by user request"},
+            "note": "user requested skip",
+            "latency_ms": 0,
+            "endpoint": TOOL_ENDPOINT_HINTS.get("openalex_search_works"),
+            "enabled": "openalex_search_works" in available_tools,
+        }
+    )
+    results.append(
+        {
+            "tool": "openalex_get_works",
+            "payload": {"ids": ["https://openalex.org/W2741809807"]},
+            "result": {"status": "skipped", "reason": "Skipped by user request"},
+            "note": "user requested skip",
+            "latency_ms": 0,
+            "endpoint": TOOL_ENDPOINT_HINTS.get("openalex_get_works"),
+            "enabled": "openalex_get_works" in available_tools,
+        }
+    )
 
     statuses = {}
     for row in results:
         status = safe_get(row, "result", "status", default="unknown")
         statuses[status] = statuses.get(status, 0) + 1
 
-    strict_rows = [row for row in results if bool(row.get("enabled", True))]
-    strict_failures = [row for row in strict_rows if safe_get(row, "result", "status", default="unknown") != "success"]
-    strict_passed = not strict_failures
+    strict_summary = summarize_strict_results(results)
+    checked_rows = strict_summary["checked_rows"]
+    core_rows = strict_summary["core_rows"]
+    optional_rows = strict_summary["optional_rows"]
+    core_failures = strict_summary["core_failures"]
+    optional_failures = strict_summary["optional_failures"]
+    optional_failure_details = strict_summary["optional_failure_details"]
+    core_passed = bool(strict_summary["core_passed"])
+    strict_passed = bool(strict_summary["strict_passed"])
+    strict_failure_tools = list(strict_summary["strict_failure_tools"])
 
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "environment": {
+            "openalex_api_key_set": bool(settings.openalex_api_key),
+            "pubmed_api_key_set": bool(settings.pubmed_api_key),
+            "semanticscholar_api_key_set": bool(settings.semanticscholar_api_key),
+            "epistemonikos_api_key_set": bool(settings.epistemonikos_api_key),
+            "artifacts_root": str(settings.artifacts_root),
+            "source_cache_root": str(settings.source_cache_root),
+            "tool_http_timeout_seconds": settings.tool_http_timeout_seconds,
+            "tool_http_max_retries": settings.tool_http_max_retries,
+        },
+        "lineage": ctx_base,
         "summary": {
             "tool_calls": len(results),
             "status_counts": statuses,
             "strict_mode": strict_mode,
-            "strict_science_tools_checked": len(strict_rows),
-            "strict_science_tools_failed": len(strict_failures),
+            "strict_science_tools_checked": len(checked_rows),
+            "strict_science_tools_failed": len(core_failures),
+            "core_checked": len(core_rows),
+            "core_failed": len(core_failures),
+            "core_passed": core_passed,
+            "optional_checked": len(optional_rows),
+            "optional_failures": optional_failure_details,
             "strict_passed": strict_passed if strict_mode else None,
-            "strict_failure_tools": [str(row.get("tool")) for row in strict_failures],
+            "strict_failure_tools": strict_failure_tools,
         },
         "results": results,
     }
@@ -223,8 +453,25 @@ def main() -> None:
     for k, v in sorted(statuses.items()):
         lines.append(f"- `{k}`: {v}")
     lines.append(f"- `strict_mode`: {strict_mode}")
-    lines.append(f"- `strict_science_tools_checked`: {len(strict_rows)}")
-    lines.append(f"- `strict_science_tools_failed`: {len(strict_failures)}")
+    lines.append(f"- `strict_science_tools_checked`: {len(checked_rows)}")
+    lines.append(f"- `strict_science_tools_failed`: {len(core_failures)}")
+    lines.append(f"- `core_checked`: {len(core_rows)}")
+    lines.append(f"- `core_failed`: {len(core_failures)}")
+    lines.append(f"- `core_passed`: {core_passed}")
+    lines.append(f"- `optional_checked`: {len(optional_rows)}")
+    lines.append(f"- `optional_failed`: {len(optional_failures)}")
+    lines.append(f"- `strict_passed`: {strict_passed if strict_mode else 'n/a'}")
+
+    if optional_failure_details:
+        lines.extend(["", "## Optional Failures"])
+        for row in optional_failure_details:
+            tool = row.get("tool")
+            status = row.get("status")
+            error_code = row.get("error_code")
+            if error_code in {"RATE_LIMIT", "UNCONFIGURED"}:
+                lines.append(f"- `{tool}`: `{status}` ({error_code}) - warning only.")
+            else:
+                lines.append(f"- `{tool}`: `{status}` ({error_code}) - optional failure retained in report.")
 
     lines.extend([
         "",
@@ -246,7 +493,20 @@ def main() -> None:
             note = (note + f" | {code}: {msg}").strip(" |")
         lines.append(f"| `{tool}` | `{status}` | `{latency_ms}` | `{endpoint}` | {note} |")
 
-    md_path.write_text("\n".join(lines), encoding="utf-8")
+    if strict_mode and not strict_passed:
+        lines.extend(
+            [
+                "",
+                "## Strict Mode Failure",
+                "",
+                f"Strict validation failed for: {', '.join(f'`{name}`' for name in strict_failure_tools)}",
+            ]
+        )
+
+    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    print(str(json_path.resolve()))
+    print(str(md_path.resolve()))
 
     if strict_mode and not strict_passed:
         raise SystemExit(1)

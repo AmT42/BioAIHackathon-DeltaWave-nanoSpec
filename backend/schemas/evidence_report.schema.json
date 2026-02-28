@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hackathon-agent-core.local/schemas/evidence_report.schema.json",
+  "title": "Evidence Report",
+  "type": "object",
+  "required": [
+    "intervention",
+    "evidence_summary",
+    "evidence_pyramid",
+    "scoring_trace",
+    "gap_map",
+    "records"
+  ],
+  "properties": {
+    "intervention": {
+      "type": "object",
+      "required": ["label"],
+      "properties": {
+        "label": {"type": "string"},
+        "type": {"type": "string"},
+        "pivot": {"type": ["object", "null"]},
+        "synonyms": {"type": "array"},
+        "xrefs": {"type": "array"}
+      },
+      "additionalProperties": true
+    },
+    "claim_context": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "evidence_summary": {
+      "type": "object",
+      "required": ["score", "label", "confidence"],
+      "properties": {
+        "score": {"type": "number", "minimum": 0, "maximum": 100},
+        "label": {"type": "string"},
+        "confidence": {"type": "string"},
+        "notes": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "evidence_pyramid": {
+      "type": "object",
+      "required": ["level_1", "level_2", "level_3", "level_4", "level_5", "level_6"],
+      "properties": {
+        "level_1": {"type": "integer", "minimum": 0},
+        "level_2": {"type": "integer", "minimum": 0},
+        "level_3": {"type": "integer", "minimum": 0},
+        "level_4": {"type": "integer", "minimum": 0},
+        "level_5": {"type": "integer", "minimum": 0},
+        "level_6": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "counts_by_source": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "counts_by_endpoint": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "scoring_trace": {
+      "type": "object",
+      "required": ["ces", "mp", "final_confidence", "components"],
+      "properties": {
+        "ces": {"type": "number"},
+        "mp": {"type": "number"},
+        "final_confidence": {"type": "number"},
+        "penalties": {"type": "array"},
+        "bonuses": {"type": "array"},
+        "caps_applied": {"type": "array"},
+        "components": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "coverage_gaps": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "gap_map": {
+      "type": "object",
+      "required": ["missing_levels", "missing_endpoints", "next_best_studies"],
+      "properties": {
+        "missing_levels": {"type": "array", "items": {"type": "string"}},
+        "missing_endpoints": {"type": "array", "items": {"type": "string"}},
+        "next_best_studies": {"type": "array", "items": {"type": "string"}},
+        "mismatch_cautions": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["study_key", "source"],
+        "properties": {
+          "study_key": {"type": "string"},
+          "source": {"type": "string"},
+          "title": {"type": ["string", "null"]},
+          "year": {"type": ["integer", "null"]},
+          "evidence_level": {"type": ["integer", "null"]},
+          "study_type": {"type": "string"},
+          "population_class": {"type": "string"},
+          "endpoint_class": {"type": "string"},
+          "effect_direction": {"type": "string"},
+          "quality_flags": {"type": "array", "items": {"type": "string"}},
+          "directness_flags": {"type": "array", "items": {"type": "string"}},
+          "ids": {"type": "object"},
+          "citations": {"type": "array"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "optional_source_status": {
+      "type": "array",
+      "items": {"type": "object"}
+    }
+  },
+  "additionalProperties": true
+}
