@@ -863,6 +863,32 @@ def test_tool_result_handle_records_falls_back_to_studies() -> None:
     assert len(handle.studies) == 1
 
 
+def test_tool_result_handle_records_falls_back_to_works_and_entries() -> None:
+    works_handle = ToolResultHandle(
+        tool_name="openalex_search",
+        payload={
+            "summary": "ok",
+            "ids": ["https://openalex.org/W1"],
+            "data": {"works": [{"id": "https://openalex.org/W1"}]},
+        },
+        raw_result={"status": "success"},
+    )
+    assert len(works_handle.records) == 1
+    assert works_handle.records[0]["id"] == "https://openalex.org/W1"
+
+    entries_handle = ToolResultHandle(
+        tool_name="longevity_drugage_query",
+        payload={
+            "summary": "ok",
+            "ids": ["12345"],
+            "data": {"entries": [{"compound_name": "metformin"}]},
+        },
+        raw_result={"status": "success"},
+    )
+    assert len(entries_handle.records) == 1
+    assert entries_handle.records[0]["compound_name"] == "metformin"
+
+
 def test_repl_merge_candidates_accepts_positional_handle_list() -> None:
     runtime = _runtime_with_tools(_merge_registry())
 

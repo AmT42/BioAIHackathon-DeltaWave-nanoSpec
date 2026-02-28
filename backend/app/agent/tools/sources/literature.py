@@ -309,7 +309,7 @@ def build_literature_tools(settings: Settings, http: SimpleHttpClient) -> list[T
         return make_tool_output(
             source="openalex",
             summary=f"Retrieved {len(compact)} OpenAlex work(s) for query '{query}'.",
-            data={"query": query, "works": compact, "meta": meta},
+            data={"query": query, "records": compact, "works": compact, "meta": meta},
             ids=ids,
             citations=citations,
             artifacts=artifacts,

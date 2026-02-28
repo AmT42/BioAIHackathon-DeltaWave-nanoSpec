@@ -284,6 +284,25 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
                 continue
             if species_filter and species_filter not in species.lower():
                 continue
+            avg_change = _find_value(
+                row,
+                [
+                    "avg_lifespan_change_percent",
+                    "average lifespan change (%)",
+                    "avg lifespan change (%)",
+                    "median lifespan change (%)",
+                ],
+            )
+            max_change = _find_value(
+                row,
+                [
+                    "max_lifespan_change_percent",
+                    "max lifespan change (%)",
+                    "maximum lifespan change (%)",
+                ],
+            )
+            pubmed_id = _find_value(row, ["pubmed_id", "pmid"])
+            reference = _find_value(row, ["pubmed_id", "pmid", "reference", "citation"])
             matches.append(
                 {
                     "compound": compound_name,
@@ -292,40 +311,13 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
                     "strain": _find_value(row, ["strain", "background"]),
                     "sex": _find_value(row, ["sex", "gender"]),
                     "dose": _find_value(row, ["dose", "dosage"]),
-                    "avg_median_lifespan_change_pct": _find_value(
-                        row,
-                        [
-                            "avg_lifespan_change_percent",
-                            "average lifespan change (%)",
-                            "avg lifespan change (%)",
-                            "median lifespan change (%)",
-                        ],
-                    ),
-                    "max_lifespan_change_pct": _find_value(
-                        row,
-                        [
-                            "max_lifespan_change_percent",
-                            "max lifespan change (%)",
-                            "maximum lifespan change (%)",
-                        ],
-                    ),
-                    "avg_lifespan_change_percent": _find_value(
-                        row,
-                        [
-                            "avg_lifespan_change_percent",
-                            "average lifespan change (%)",
-                            "avg lifespan change (%)",
-                            "median lifespan change (%)",
-                        ],
-                    ),
-                    "max_lifespan_change_percent": _find_value(
-                        row,
-                        [
-                            "max_lifespan_change_percent",
-                            "max lifespan change (%)",
-                            "maximum lifespan change (%)",
-                        ],
-                    ),
+                    "avg_median_lifespan_change_pct": avg_change,
+                    "max_lifespan_change_pct": max_change,
+                    "avg_lifespan_change_percent": avg_change,
+                    "max_lifespan_change_percent": max_change,
+                    # Compatibility aliases commonly assumed by model code.
+                    "avg_lifespan_change": avg_change,
+                    "max_lifespan_change": max_change,
                     "significance": _find_value(
                         row,
                         [
@@ -334,7 +326,8 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
                             "significance",
                         ],
                     ),
-                    "reference": _find_value(row, ["pubmed_id", "pmid", "reference", "citation"]),
+                    "pubmed_id": pubmed_id,
+                    "reference": reference,
                     "raw": row,
                 }
             )
@@ -349,6 +342,7 @@ def build_longevity_tools(http: SimpleHttpClient) -> list[ToolSpec]:
                 "query": query,
                 "mode": mode,
                 "species_filter": species_filter,
+                "records": matches,
                 "entries": matches,
                 "cache_path": str(path),
             },

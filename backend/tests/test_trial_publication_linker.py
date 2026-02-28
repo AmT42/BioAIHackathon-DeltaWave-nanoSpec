@@ -39,5 +39,6 @@ def test_trial_publication_linker_flags_completed_without_publications() -> None
     )
 
     link = output["data"]["links"][0]
+    assert output["data"]["records"] == output["data"]["links"]
     assert link["nct_id"] == "NCT01234567"
     assert link["flag"] == "completed_but_unpublished_possible"
