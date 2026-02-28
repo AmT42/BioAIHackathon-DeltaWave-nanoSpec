@@ -592,7 +592,7 @@ def build_normalization_tools(http: SimpleHttpClient) -> list[ToolSpec]:
             data={"concept": concept},
             ids=[str(pivot.get("id"))],
             warnings=warnings,
-            next_recommended_tools=["retrieval_build_query_terms", "retrieval_build_pubmed_templates"],
+            next_recommended_tools=["kg_query", "retrieval_build_query_terms", "retrieval_build_pubmed_templates"],
             ctx=ctx,
         )
 

@@ -14,10 +14,11 @@ Reliability target:
 
 Mandatory retrieval order:
 1. Normalize the input concept.
-2. Retrieve high-evidence human literature first.
-3. Check registered human trials and run mismatch audit conditions.
-4. Enrich with preclinical longevity and safety context.
-5. Use optional sources only when they add clear value.
+2. Query the knowledge graph (kg_query) to ground your understanding of the intervention's biological context — targets, pathways, gene associations, mechanisms. Use the KG results to refine and focus your literature search terms (e.g., specific protein targets, pathway names, associated diseases).
+3. Retrieve high-evidence human literature first, using KG-informed terms alongside normalized synonyms.
+4. Check registered human trials and run mismatch audit conditions.
+5. Enrich with preclinical longevity and safety context.
+6. Use optional sources only when they add clear value.
 
 Tool routing by concept type:
 - Drug-like input: normalize_drug -> normalize_drug_related -> normalize_merge_candidates.
@@ -25,8 +26,14 @@ Tool routing by concept type:
 - Disease/phenotype/procedure/lifestyle input: normalize_ontology -> normalize_ontology_fetch -> normalize_merge_candidates.
 - If uncertain: run normalize_ontology and normalize_compound in parallel where possible, then merge.
 
+Knowledge graph enrichment (when kg_query is available):
+- After normalization and before literature search, call kg_query with a question about the intervention's biological context (e.g., "What proteins does [intervention] target and what pathways are they involved in?").
+- Extract key biological terms from the KG results: protein names, pathway names, gene symbols, associated diseases.
+- Incorporate these KG-derived terms into your retrieval_build_query_terms and PubMed search queries so that literature search is focused on mechanistically relevant evidence rather than broad keyword matches.
+- If kg_query returns no results or is unavailable, proceed with normalization-derived terms only.
+
 Core retrieval policy:
-- Build terms with retrieval_build_query_terms.
+- Build terms with retrieval_build_query_terms, augmented with KG-derived terms when available.
 - Build tiered PubMed templates with retrieval_build_pubmed_templates.
 - Use pubmed_search before optional literature tools.
 - Use clinicaltrials_search for human reality checks.
@@ -43,6 +50,7 @@ Argument calibration rules:
 Source trust hierarchy:
 - Primary clinical evidence: PubMed + ClinicalTrials.gov.
 - Core normalization: RxNorm, PubChem, OLS.
+- Mechanistic grounding: CROssBAR Knowledge Graph (kg_query).
 - Core enrichment: DailyMed/openFDA, DrugAge, ITP.
 - Optional enrichment: OpenAlex, Semantic Scholar, ChEMBL, ChEBI, Epistemonikos.
 
