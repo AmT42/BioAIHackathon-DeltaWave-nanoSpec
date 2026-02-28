@@ -18,7 +18,13 @@ from app.persistence.service import ChatStore
 @pytest.mark.asyncio
 async def test_core_uses_runtime_system_prompt_for_messages_and_provider_call() -> None:
     await init_db()
-    settings = replace(get_settings(), mock_llm=True, gemini_api_key=None, gemini_model="gemini/gemini-3-flash")
+    settings = replace(
+        get_settings(),
+        mock_llm=True,
+        gemini_api_key=None,
+        gemini_model="gemini/gemini-3-flash",
+        repl_subagent_enabled=True,
+    )
 
     class _CaptureProvider:
         def __init__(self) -> None:
@@ -59,6 +65,8 @@ async def test_core_uses_runtime_system_prompt_for_messages_and_provider_call() 
     system_prompt = str(first_call.get("system_prompt") or "")
     assert "Runtime Environment Brief" in system_prompt
     assert "installed_packages(limit=200)" in system_prompt
+    assert "llm_query(" in system_prompt
+    assert "sub-agent REPL stdout line cap" in system_prompt
     messages = first_call.get("messages")
     assert isinstance(messages, list) and messages
     first_message = messages[0] if isinstance(messages[0], dict) else {}

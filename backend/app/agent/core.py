@@ -13,6 +13,7 @@ from app.agent.adapters import build_gemini_openai_messages
 from app.agent.providers import GeminiProvider
 from app.agent.prompt import DEFAULT_SYSTEM_PROMPT
 from app.agent.repl import ReplRuntime, ReplSessionManager
+from app.agent.subagent_runner import SubagentRunner
 from app.agent.tools.registry import ToolRegistry
 from app.agent.types import ToolCall
 from app.config import Settings
@@ -188,6 +189,22 @@ class AgentCore:
         self.tools = tools
         if settings.agent_execution_mode != "repl_only":
             raise ValueError("Only 'repl_only' execution mode is supported in this build")
+        self._providers = {
+            "gemini": GeminiProvider(
+                api_key=settings.gemini_api_key,
+                model=settings.gemini_model,
+                reasoning_effort=settings.gemini_reasoning_effort,
+                include_thoughts=settings.gemini_include_thoughts,
+                thinking_budget=settings.gemini_thinking_budget,
+                replay_signature_mode=settings.gemini_replay_signature_mode,
+                mock_mode=settings.mock_llm,
+            ),
+        }
+        self.subagent_runner = SubagentRunner(
+            settings=settings,
+            tools=tools,
+            provider=self._providers["gemini"],
+        )
         self.repl_runtime = ReplRuntime(
             tools=tools,
             workspace_root=settings.repl_workspace_root,
@@ -213,18 +230,11 @@ class AgentCore:
             lazy_install_allowlist=settings.repl_lazy_install_allowlist,
             lazy_install_timeout_seconds=settings.repl_lazy_install_timeout_seconds,
             lazy_install_index_url=settings.repl_lazy_install_index_url,
+            enable_subagent_helpers=settings.repl_subagent_enabled,
+            llm_query_handler=self.subagent_runner.llm_query if settings.repl_subagent_enabled else None,
+            llm_query_batch_handler=self.subagent_runner.llm_query_batch if settings.repl_subagent_enabled else None,
+            subagent_stdout_line_soft_limit=settings.repl_subagent_stdout_line_soft_limit,
         )
-        self._providers = {
-            "gemini": GeminiProvider(
-                api_key=settings.gemini_api_key,
-                model=settings.gemini_model,
-                reasoning_effort=settings.gemini_reasoning_effort,
-                include_thoughts=settings.gemini_include_thoughts,
-                thinking_budget=settings.gemini_thinking_budget,
-                replay_signature_mode=settings.gemini_replay_signature_mode,
-                mock_mode=settings.mock_llm,
-            ),
-        }
 
     def _runtime_system_prompt(self) -> str:
         tool_names = sorted(self.tools.names())
@@ -236,9 +246,21 @@ class AgentCore:
         blocked_patterns = ", ".join(sorted(self.settings.repl_blocked_command_patterns))
         helpers = (
             "`help_repl()`, `help_tools()`, `help_tool('name')`, "
-            "`help_examples('longevity')`, `help_examples('shell_vs_repl')`, `installed_packages()`, "
+            "`help_examples('longevity')`, `help_examples('shell_vs_repl')`, `help_examples('subagents')`, "
+            "`installed_packages()`, "
             "`runtime_info()`, `env_vars()`"
         )
+        subagent_lines = (
+            "- Sub-agent helpers in main REPL:\n"
+            "  - `llm_query(task, env=..., allowed_tools=..., custom_instruction=..., allow_repl=True, allow_bash=True)`\n"
+            "  - `llm_query_batch(tasks, shared_env=..., allowed_tools=..., max_workers=...)`\n"
+            "  - use for fan-out exploration to keep main-agent context compact.\n"
+            "  - pass large IDs/objects through `env` rather than prompt text.\n"
+            "  - attach wrapper subsets via `allowed_tools` when narrowing scope.\n"
+            f"  - sub-agent REPL stdout line cap: {self.settings.repl_subagent_stdout_line_soft_limit} chars.\n"
+        )
+        if not self.settings.repl_subagent_enabled:
+            subagent_lines = "- Sub-agent helpers: disabled by runtime config.\n"
         runtime_addendum = (
             "\n\n## Runtime Environment Brief (authoritative)\n"
             "- Execution model: `repl_exec` for Python wrappers, `bash_exec` for shell.\n"
@@ -252,6 +274,7 @@ class AgentCore:
             f"  {tool_list}\n"
             "- REPL helper functions available at runtime:\n"
             f"  {helpers}\n"
+            f"{subagent_lines}"
             "- First-turn package discovery:\n"
             "  - `print(installed_packages(limit=200))` to inspect Python packages available in this runtime.\n"
             "- Result handle ergonomics:\n"
