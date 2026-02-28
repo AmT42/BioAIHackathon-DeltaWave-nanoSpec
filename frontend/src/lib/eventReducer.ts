@@ -329,10 +329,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const target = nextTurns[ensured.index];
       const stepId = `thinking-${runId ?? "norun"}-${event.segment_index ?? 0}`;
       const existing = target.workSteps.find((step) => step.id === stepId);
+      const finalSummary =
+        typeof event.summary === "string" && event.summary.trim().length > 0
+          ? event.summary
+          : existing?.text ?? "";
       target.workSteps = upsertWorkStep(target.workSteps, {
         id: stepId,
         kind: "thinking",
-        text: existing?.text || event.summary || "",
+        text: finalSummary,
         status: "done",
         segmentIndex: event.segment_index,
       });
@@ -381,7 +385,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const ensured = ensureTurn(baseState.turns, runId);
       const nextTurns = [...ensured.turns];
       const target = nextTurns[ensured.index];
-      if (typeof event.content === "string") {
+      if (typeof event.content === "string" && event.content.trim().length > 0) {
         target.assistantText = event.content;
       }
       target.assistantMessageId = event.message_id ?? target.assistantMessageId;
@@ -442,7 +446,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       if (event.message?.id) {
         target.assistantMessageId = event.message.id;
       }
-      if (typeof event.message?.content === "string") {
+      if (typeof event.message?.content === "string" && event.message.content.trim().length > 0) {
         target.assistantText = event.message.content;
       }
       target.status = "done";

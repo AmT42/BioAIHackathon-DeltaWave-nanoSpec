@@ -58,7 +58,7 @@ def test_build_gemini_messages_orphan_tool_result_falls_back_to_assistant_text()
     messages = build_gemini_messages(events)
     assert messages[0] == {"role": "user", "content": "hello"}
     assert messages[1]["role"] == "assistant"
-    assert "[tool_output]" in messages[1]["content"]
+    assert "Historical tool output:" in messages[1]["content"]
 
 
 def test_build_claude_messages_drops_orphan_tool_use_without_result() -> None:

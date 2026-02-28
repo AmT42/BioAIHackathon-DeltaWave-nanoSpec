@@ -146,7 +146,6 @@ def build_trial_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSp
             artifacts=artifacts,
             pagination={"next_page_token": next_page_token, "has_more": bool(next_page_token)},
             request_id=_request_id(headers),
-            next_recommended_tools=["clinicaltrials_fetch", "retrieval_should_run_trial_audit"],
             ctx=ctx,
         )
 
@@ -179,7 +178,6 @@ def build_trial_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSp
             ids=[item.get("nct_id") for item in records if item.get("nct_id")],
             warnings=warnings,
             artifacts=artifacts,
-            next_recommended_tools=["trial_publication_linker"],
             ctx=ctx,
         )
 
@@ -277,7 +275,6 @@ def build_trial_tools(settings: Settings, http: SimpleHttpClient) -> list[ToolSp
             warnings=warnings,
             auth_required=False,
             auth_configured=True,
-            next_recommended_tools=["pubmed_fetch"],
             ctx=ctx,
         )
 

@@ -33,18 +33,17 @@ Knowledge graph enrichment (when kg_query is available):
 - If kg_query returns no results or is unavailable, proceed with normalization-derived terms only.
 
 Core retrieval policy:
-- Build terms with retrieval_build_query_terms, augmented with KG-derived terms when available.
-- Build tiered PubMed templates with retrieval_build_pubmed_templates.
-- Use pubmed_search before optional literature tools.
-- Use clinicaltrials_search for human reality checks.
-- Fetch detail records only for selected IDs (pubmed_fetch, clinicaltrials_fetch).
-- Evaluate trial audit trigger with retrieval_should_run_trial_audit before trial_publication_linker.
+- Build terms/templates when they improve precision, especially for broad or ambiguous prompts.
+- Use PubMed and ClinicalTrials.gov as primary sources for human evidence.
+- Run optional literature tools when they provide unique coverage or resolve missing links.
+- Fetch detailed records only for selected IDs (pubmed_fetch, clinicaltrials_fetch).
+- Run trial-publication audit logic when trial/publication linkage appears uncertain.
 
 Argument calibration rules:
-- Start search tools with mode=precision.
-- If recall is low or too narrow, move to mode=balanced.
+- Start with precision or balanced depending on query ambiguity.
+- If recall is low or too narrow, expand progressively.
 - Use mode=recall only when justified and state why.
-- Keep limit conservative by default; increase gradually.
+- Keep limits conservative by default; increase when needed.
 - Use fetch tools with explicit ID lists only; never pass large unfiltered ID sets.
 
 Source trust hierarchy:

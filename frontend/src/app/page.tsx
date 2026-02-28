@@ -1,13 +1,34 @@
 "use client";
 
-import { FormEvent, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import { ChatTimeline } from "@/components/ChatTimeline";
+import { Header } from "@/components/Header";
+import { Sidebar } from "@/components/Sidebar";
+import { ChatMessage } from "@/components/ChatMessage";
+import { Composer } from "@/components/Composer";
 import { chatReducer, initialChatState } from "@/lib/eventReducer";
 import { connectChatSocket, WsClient } from "@/lib/wsClient";
 import { WsEvent } from "@/types/events";
+import { ThreadMeta } from "@/types/threads";
+import {
+  getThreadList,
+  saveThread,
+  removeThread,
+  updateThreadTitle,
+  getActiveThreadId,
+  setActiveThreadId,
+} from "@/lib/storage";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+
+const SUGGESTIONS = [
+  "Rapamycin",
+  "Metformin (TAME trial)",
+  "NAD+ precursors (NMN/NR)",
+  "Senolytics (dasatinib + quercetin)",
+  "Hyperbaric oxygen therapy",
+  "Epigenetic reprogramming",
+];
 
 type ApiMessage = {
   id: string;
@@ -22,18 +43,30 @@ type ApiMessage = {
 
 export default function Page() {
   const [state, dispatch] = useReducer(chatReducer, initialChatState);
-  const [input, setInput] = useState("");
   const [connected, setConnected] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
+  const [threads, setThreads] = useState<ThreadMeta[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const wsRef = useRef<WsClient | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
-  const canSend = connected && input.trim().length > 0;
+  const isStreaming = state.turns.some((t) => t.status === "streaming");
+
+  // Auto-scroll during streaming
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    // Only auto-scroll if user is near the bottom
+    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
+    if (nearBottom || isStreaming) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [state.turns, isStreaming]);
 
   async function createThread(): Promise<string> {
     const response = await fetch(`${BACKEND_URL}/api/threads`, { method: "POST" });
-    if (!response.ok) {
-      throw new Error(`Failed to create thread: ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`Failed to create thread: ${response.status}`);
     const body = (await response.json()) as { thread_id: string };
     return body.thread_id;
   }
@@ -56,12 +89,25 @@ export default function Page() {
     });
   }
 
-  async function reconnect(nextThreadId?: string): Promise<void> {
+  const reconnect = useCallback(async (nextThreadId?: string): Promise<void> => {
     const useThreadId = nextThreadId ?? threadId ?? (await createThread());
 
     wsRef.current?.close();
     dispatch({ type: "RESET", threadId: useThreadId });
     setThreadId(useThreadId);
+    setActiveThreadId(useThreadId);
+
+    // Save to thread list
+    const existing = getThreadList().find((t) => t.id === useThreadId);
+    if (!existing) {
+      saveThread({
+        id: useThreadId,
+        title: "New conversation",
+        createdAt: new Date().toISOString(),
+        lastActiveAt: new Date().toISOString(),
+      });
+      setThreads(getThreadList());
+    }
 
     wsRef.current = connectChatSocket({
       backendUrl: BACKEND_URL,
@@ -75,10 +121,14 @@ export default function Page() {
     });
 
     await loadMessages(useThreadId);
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId]);
 
+  // Mount: load persisted thread or create new one
   useEffect(() => {
-    reconnect().catch((error) => {
+    setThreads(getThreadList());
+    const savedId = getActiveThreadId();
+    reconnect(savedId ?? undefined).catch((error) => {
       dispatch({ type: "WS_EVENT", event: { type: "main_agent_error", error: String(error) } as WsEvent });
     });
     return () => {
@@ -88,66 +138,124 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    if (!canSend || !wsRef.current) return;
-    const msg = input.trim();
-    dispatch({ type: "LOCAL_USER_MESSAGE", message: msg });
-    wsRef.current.sendUserMessage(msg);
-    setInput("");
+  function handleSend(message: string) {
+    if (!connected || !wsRef.current) return;
+    dispatch({ type: "LOCAL_USER_MESSAGE", message });
+    wsRef.current.sendUserMessage(message);
+
+    // Update thread title on first user message
+    if (threadId) {
+      const thread = getThreadList().find((t) => t.id === threadId);
+      if (thread?.title === "New conversation") {
+        updateThreadTitle(threadId, message.slice(0, 60));
+      }
+      saveThread({
+        id: threadId,
+        title: thread?.title === "New conversation" ? message.slice(0, 60) : thread?.title ?? message.slice(0, 60),
+        createdAt: thread?.createdAt ?? new Date().toISOString(),
+        lastActiveAt: new Date().toISOString(),
+      });
+      setThreads(getThreadList());
+    }
   }
 
-  return (
-    <main className="shell">
-      <section className="panel">
-        <header className="panel-header">
-          <div>
-            <h1>Hackathon Agent Core</h1>
-            <p>Gemini interleaved thinking + tool streaming (worklog separated from answer).</p>
-          </div>
-          <div className="controls">
-            <span>Provider: Gemini</span>
-            <button
-              type="button"
-              onClick={() =>
-                reconnect().catch((error) =>
-                  dispatch({ type: "WS_EVENT", event: { type: "main_agent_error", error: String(error) } as WsEvent })
-                )
-              }
-            >
-              Reconnect
-            </button>
-            <button
-              type="button"
-              onClick={async () => {
-                const newThread = await createThread();
-                await reconnect(newThread);
-              }}
-            >
-              New Thread
-            </button>
-          </div>
-        </header>
+  async function handleNewThread() {
+    try {
+      const newId = await createThread();
+      await reconnect(newId);
+    } catch (error) {
+      dispatch({ type: "WS_EVENT", event: { type: "main_agent_error", error: String(error) } as WsEvent });
+    }
+  }
 
-        <div className="meta">
-          <span>Thread: {state.threadId ?? threadId ?? "-"}</span>
-          <span>Status: {connected ? "connected" : "disconnected"}</span>
-          {state.error ? <span className="error">Error: {state.error}</span> : null}
+  async function handleSelectThread(selectedId: string) {
+    if (selectedId === threadId) return;
+    try {
+      await reconnect(selectedId);
+    } catch (error) {
+      dispatch({ type: "WS_EVENT", event: { type: "main_agent_error", error: String(error) } as WsEvent });
+    }
+  }
+
+  function handleDeleteThread(deleteId: string) {
+    removeThread(deleteId);
+    setThreads(getThreadList());
+    if (deleteId === threadId) {
+      handleNewThread();
+    }
+  }
+
+  function handleSuggestion(suggestion: string) {
+    handleSend(`Analyze the evidence for: ${suggestion}`);
+  }
+
+  const hasTurns = state.turns.length > 0;
+
+  return (
+    <div className="app-layout">
+      {/* Mobile backdrop */}
+      {sidebarOpen && (
+        <div
+          className="sidebar-backdrop"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      <Sidebar
+        threads={threads}
+        activeThreadId={threadId}
+        onSelectThread={handleSelectThread}
+        onNewThread={handleNewThread}
+        onDeleteThread={handleDeleteThread}
+        open={sidebarOpen}
+      />
+
+      <main className="main-panel">
+        <Header
+          threadId={threadId}
+          connected={connected}
+          streaming={isStreaming}
+          onNewThread={handleNewThread}
+          onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+          sidebarOpen={sidebarOpen}
+        />
+
+        <div className="messages-container" ref={messagesContainerRef}>
+          {!hasTurns ? (
+            <div className="welcome">
+              <div className="welcome__icon">&#x1F9EC;</div>
+              <h2 className="welcome__title">Longevity Evidence Agent</h2>
+              <p className="welcome__subtitle">
+                AI-powered evidence grading for aging interventions. Ask about any compound
+                or therapy to get a structured evidence report with confidence scores.
+              </p>
+              <div className="welcome__suggestions">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    className="welcome__suggestion"
+                    onClick={() => handleSuggestion(s)}
+                    disabled={!connected}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            state.turns.map((turn) => <ChatMessage key={turn.id} turn={turn} />)
+          )}
+          <div ref={messagesEndRef} />
         </div>
 
-        <ChatTimeline turns={state.turns} />
-
-        <form className="composer" onSubmit={onSubmit}>
-          <input
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder="Ask a life-science question or request a tool call..."
-          />
-          <button type="submit" disabled={!canSend}>
-            Send
-          </button>
-        </form>
-      </section>
-    </main>
+        <Composer
+          onSend={handleSend}
+          disabled={!connected}
+          streaming={isStreaming}
+          connected={connected}
+        />
+      </main>
+    </div>
   );
 }
