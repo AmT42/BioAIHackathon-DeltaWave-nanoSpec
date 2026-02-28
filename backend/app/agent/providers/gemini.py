@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import logging
 import uuid
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from app.agent.providers.base import ProviderClient
 from app.agent.types import ProviderStreamResult, ToolCall
@@ -19,6 +20,8 @@ _EFFORT_TO_BUDGET: dict[str, int] = {
     "medium": 4096,
     "high": 8192,
 }
+
+_DUMMY_THOUGHT_SIGNATURE = "skip_thought_signature_validator"
 
 
 def _coerce_text(value: Any) -> str:
@@ -90,25 +93,107 @@ def _parse_tool_arguments(raw_arguments: Any) -> dict[str, Any]:
     return {"raw": _coerce_text(raw_arguments)}
 
 
+def _normalize_thought_signature(value: Any) -> str | None:
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    if isinstance(value, (bytes, bytearray)):
+        raw = bytes(value)
+        if not raw:
+            return None
+        return base64.b64encode(raw).decode("ascii")
+    if isinstance(value, memoryview):
+        raw = value.tobytes()
+        if not raw:
+            return None
+        return base64.b64encode(raw).decode("ascii")
+    return None
+
+
+def _decode_base64_thought_signature(value: str) -> bytes | None:
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        decoded = base64.b64decode(normalized, validate=True)
+    except Exception:
+        return None
+    return decoded or None
+
+
 def _extract_tool_signature(tool_call: dict[str, Any]) -> str | None:
     provider_specific = tool_call.get("provider_specific_fields")
     if isinstance(provider_specific, dict):
         sig = provider_specific.get("thought_signature")
-        if isinstance(sig, str) and sig.strip():
-            return sig.strip()
+        normalized = _normalize_thought_signature(sig)
+        if normalized:
+            return normalized
+        sig = provider_specific.get("thoughtSignature")
+        normalized = _normalize_thought_signature(sig)
+        if normalized:
+            return normalized
 
     extra_content = tool_call.get("extra_content")
     if isinstance(extra_content, dict):
         google_payload = extra_content.get("google")
         if isinstance(google_payload, dict):
             sig = google_payload.get("thought_signature")
-            if isinstance(sig, str) and sig.strip():
-                return sig.strip()
+            normalized = _normalize_thought_signature(sig)
+            if normalized:
+                return normalized
+            sig = google_payload.get("thoughtSignature")
+            normalized = _normalize_thought_signature(sig)
+            if normalized:
+                return normalized
+        sig = extra_content.get("thought_signature")
+        normalized = _normalize_thought_signature(sig)
+        if normalized:
+            return normalized
+        sig = extra_content.get("thoughtSignature")
+        normalized = _normalize_thought_signature(sig)
+        if normalized:
+            return normalized
     return None
 
 
 def _format_history_tool_output_fallback(tool_name: str, response_payload: dict[str, Any]) -> str:
     return f"Historical tool output ({tool_name}):\n{_coerce_text(response_payload)}"
+
+
+def _format_history_tool_call_fallback(tool_name: str, tool_input: dict[str, Any]) -> str:
+    return f"Historical tool call ({tool_name}):\n{_coerce_text(tool_input)}"
+
+
+def _function_call_part_has_signature(part: Any) -> bool:
+    part_dict = _as_dict(part) if not isinstance(part, dict) else part
+    if not isinstance(part_dict, dict):
+        return False
+    normalized = _normalize_thought_signature(part_dict.get("thought_signature"))
+    if normalized:
+        return True
+    normalized = _normalize_thought_signature(part_dict.get("thoughtSignature"))
+    if normalized:
+        return True
+    normalized = _normalize_thought_signature(getattr(part, "thought_signature", None))
+    if normalized:
+        return True
+    normalized = _normalize_thought_signature(getattr(part, "thoughtSignature", None))
+    if normalized:
+        return True
+
+    fn_raw = part_dict.get("function_call")
+    if fn_raw is None:
+        fn_raw = part_dict.get("functionCall")
+    fn_dict = _as_dict(fn_raw) if not isinstance(fn_raw, dict) else fn_raw
+    if not isinstance(fn_dict, dict):
+        return False
+    normalized = _normalize_thought_signature(fn_dict.get("thought_signature"))
+    if normalized:
+        return True
+    normalized = _normalize_thought_signature(fn_dict.get("thoughtSignature"))
+    if normalized:
+        return True
+    return False
 
 
 def _extract_parts_from_chunk(chunk: Any) -> list[Any]:
@@ -183,12 +268,17 @@ def _extract_part_function_call(part: Any) -> dict[str, Any] | None:
     thought_signature = fn_dict.get("thought_signature")
     if thought_signature is None:
         thought_signature = fn_dict.get("thoughtSignature")
+    if thought_signature is None and fn_raw is not None:
+        thought_signature = getattr(fn_raw, "thought_signature", None) or getattr(fn_raw, "thoughtSignature", None)
     if thought_signature is None:
         thought_signature = part_dict.get("thought_signature")
     if thought_signature is None:
         thought_signature = part_dict.get("thoughtSignature")
-    if isinstance(thought_signature, str) and thought_signature.strip():
-        payload["thought_signature"] = thought_signature.strip()
+    if thought_signature is None:
+        thought_signature = getattr(part, "thought_signature", None) or getattr(part, "thoughtSignature", None)
+    normalized_signature = _normalize_thought_signature(thought_signature)
+    if normalized_signature:
+        payload["thought_signature"] = normalized_signature
     return payload
 
 
@@ -213,6 +303,18 @@ def _emit_incremental(
     return consumed + snapshot
 
 
+def _new_replay_stats() -> dict[str, int]:
+    return {
+        "replay_steps_total": 0,
+        "replay_steps_downgraded_missing_leading_signature": 0,
+        "replay_calls_kept_unsigned_nonleading": 0,
+        "replay_calls_dropped_unrecoverable_signature": 0,
+        "replay_calls_injected_placeholder_signature": 0,
+        # Backward-compatible aggregate that existing dashboards/tests may read.
+        "unsigned_history_tool_call_count": 0,
+    }
+
+
 class GeminiProvider(ProviderClient):
     def __init__(
         self,
@@ -222,6 +324,7 @@ class GeminiProvider(ProviderClient):
         reasoning_effort: str = "low",
         include_thoughts: bool = True,
         thinking_budget: int | None = None,
+        replay_signature_mode: Literal["strict", "placeholder"] = "strict",
         mock_mode: bool = False,
     ) -> None:
         self.api_key = api_key
@@ -229,6 +332,10 @@ class GeminiProvider(ProviderClient):
         self.reasoning_effort = reasoning_effort
         self.include_thoughts = include_thoughts
         self.thinking_budget = thinking_budget
+        normalized_mode = str(replay_signature_mode).strip().lower()
+        self.replay_signature_mode: Literal["strict", "placeholder"] = (
+            "placeholder" if normalized_mode == "placeholder" else "strict"
+        )
         self.mock_mode = mock_mode
 
     def _mock_turn(
@@ -301,27 +408,44 @@ class GeminiProvider(ProviderClient):
         if genai_types is not None:
             part_cls = getattr(genai_types, "Part", None)
             if part_cls is not None and hasattr(part_cls, "from_function_call"):
-                kwargs: dict[str, Any] = {"name": tool_name, "args": tool_input}
+                kwargs_base: dict[str, Any] = {"name": tool_name, "args": tool_input}
+                base_variants: list[dict[str, Any]] = []
                 if tool_call_id:
-                    kwargs["id"] = tool_call_id
-                if thought_signature:
-                    kwargs["thought_signature"] = thought_signature
-                try:
-                    return part_cls.from_function_call(**kwargs)
-                except Exception:
-                    # Fallback: older SDKs might not accept thought_signature.
-                    kwargs.pop("thought_signature", None)
+                    base_with_id = dict(kwargs_base)
+                    base_with_id["id"] = tool_call_id
+                    base_variants.append(base_with_id)
+                base_variants.append(kwargs_base)
+
+                for kwargs_base_variant in base_variants:
+                    if thought_signature:
+                        signature_candidates: list[Any] = [thought_signature]
+                        decoded = _decode_base64_thought_signature(thought_signature)
+                        if decoded is not None:
+                            signature_candidates.insert(0, decoded)
+                        for candidate in signature_candidates:
+                            kwargs = dict(kwargs_base_variant)
+                            kwargs["thought_signature"] = candidate
+                            try:
+                                return part_cls.from_function_call(**kwargs)
+                            except Exception:
+                                continue
+                        # Important: if the signature is present but SDK helper
+                        # does not accept it, do not silently drop it.
+                        continue
                     try:
-                        return part_cls.from_function_call(**kwargs)
+                        return part_cls.from_function_call(**kwargs_base_variant)
                     except Exception:
-                        pass
+                        continue
 
         payload: dict[str, Any] = {"name": tool_name, "args": tool_input}
         if tool_call_id:
             payload["id"] = tool_call_id
+        part_payload: dict[str, Any] = {"function_call": payload}
         if thought_signature:
-            payload["thought_signature"] = thought_signature
-        return {"function_call": payload}
+            # Gemini SDK validation expects thought_signature on the Part
+            # wrapper for function_call parts (not nested inside function_call).
+            part_payload["thought_signature"] = thought_signature
+        return part_payload
 
     def _build_function_response_part(
         self,
@@ -340,7 +464,11 @@ class GeminiProvider(ProviderClient):
                 try:
                     return part_cls.from_function_response(**kwargs)
                 except Exception:
-                    pass
+                    if tool_call_id:
+                        try:
+                            return part_cls.from_function_response(name=tool_name, response=response)
+                        except Exception:
+                            pass
 
         payload: dict[str, Any] = {"name": tool_name, "response": response}
         if tool_call_id:
@@ -430,15 +558,14 @@ class GeminiProvider(ProviderClient):
         messages: list[dict[str, Any]],
         system_prompt: str,
         genai_types: Any | None,
-    ) -> tuple[list[Any], str | None, int]:
+    ) -> tuple[list[Any], str | None, dict[str, int]]:
         contents: list[Any] = []
         system_instruction = system_prompt.strip() if system_prompt and system_prompt.strip() else None
 
         require_signature = "gemini-3" in self.model.lower()
-        unsigned_history_tool_calls = 0
+        replay_stats = _new_replay_stats()
         emitted_function_call_ids: set[str] = set()
         tool_name_by_id: dict[str, str] = {}
-        skipped_unsigned_function_call_ids: set[str] = set()
 
         for raw_msg in messages:
             if not isinstance(raw_msg, dict):
@@ -461,14 +588,14 @@ class GeminiProvider(ProviderClient):
                     parts.append(self._build_text_part(_coerce_text(content), genai_types=genai_types))
 
                 tool_calls = raw_msg.get("tool_calls")
-                if isinstance(tool_calls, list):
+                if isinstance(tool_calls, list) and tool_calls:
+                    parsed_step_calls: list[dict[str, Any]] = []
                     for tool_call in tool_calls:
                         tc = _as_dict(tool_call) if not isinstance(tool_call, dict) else tool_call
                         if not isinstance(tc, dict):
                             continue
                         tc_id = tc.get("id") or tc.get("tool_call_id")
-                        if tc_id is not None:
-                            tc_id = str(tc_id)
+                        tc_id_str = str(tc_id) if tc_id is not None else None
 
                         fn = tc.get("function")
                         fn_dict = _as_dict(fn) if not isinstance(fn, dict) else fn
@@ -483,26 +610,88 @@ class GeminiProvider(ProviderClient):
                         if raw_args is None:
                             raw_args = tc.get("input")
                         parsed_input = _parse_tool_arguments(raw_args)
-                        thought_signature = _extract_tool_signature(tc)
 
-                        if require_signature and not thought_signature:
-                            unsigned_history_tool_calls += 1
-                            if tc_id:
-                                skipped_unsigned_function_call_ids.add(tc_id)
-                            continue
+                        parsed_step_calls.append(
+                            {
+                                "id": tc_id_str,
+                                "name": tool_name,
+                                "input": parsed_input,
+                                "thought_signature": _extract_tool_signature(tc),
+                            }
+                        )
 
-                        parts.append(
-                            self._build_function_call_part(
-                                tool_name=tool_name,
-                                tool_input=parsed_input,
-                                tool_call_id=tc_id,
-                                thought_signature=thought_signature,
+                    if parsed_step_calls:
+                        replay_stats["replay_steps_total"] += 1
+
+                        def _downgrade_step(step_calls: list[dict[str, Any]]) -> None:
+                            replay_stats["replay_steps_downgraded_missing_leading_signature"] += 1
+                            replay_stats["replay_calls_dropped_unrecoverable_signature"] += len(step_calls)
+                            replay_stats["unsigned_history_tool_call_count"] += len(step_calls)
+                            for call in step_calls:
+                                fallback_text = _format_history_tool_call_fallback(
+                                    str(call.get("name") or "unknown_tool"),
+                                    call.get("input") if isinstance(call.get("input"), dict) else {},
+                                )
+                                parts.append(self._build_text_part(fallback_text, genai_types=genai_types))
+
+                        first_call = parsed_step_calls[0]
+                        first_signature = first_call.get("thought_signature")
+                        if require_signature and not first_signature:
+                            if self.replay_signature_mode == "placeholder":
+                                first_call["thought_signature"] = _DUMMY_THOUGHT_SIGNATURE
+                                replay_stats["replay_calls_injected_placeholder_signature"] += 1
+                            else:
+                                _downgrade_step(parsed_step_calls)
+                                parsed_step_calls = []
+
+                        if parsed_step_calls:
+                            first_call = parsed_step_calls[0]
+                            first_part = self._build_function_call_part(
+                                tool_name=str(first_call["name"]),
+                                tool_input=first_call["input"],
+                                tool_call_id=first_call["id"],
+                                thought_signature=first_call.get("thought_signature"),
                                 genai_types=genai_types,
                             )
-                        )
-                        if tc_id:
-                            emitted_function_call_ids.add(tc_id)
-                            tool_name_by_id[tc_id] = tool_name
+
+                            if require_signature and not _function_call_part_has_signature(first_part):
+                                if self.replay_signature_mode == "placeholder":
+                                    if not _normalize_thought_signature(first_call.get("thought_signature")):
+                                        replay_stats["replay_calls_injected_placeholder_signature"] += 1
+                                    first_part = self._build_function_call_part(
+                                        tool_name=str(first_call["name"]),
+                                        tool_input=first_call["input"],
+                                        tool_call_id=first_call["id"],
+                                        thought_signature=_DUMMY_THOUGHT_SIGNATURE,
+                                        genai_types=None,
+                                    )
+                                else:
+                                    _downgrade_step(parsed_step_calls)
+                                    parsed_step_calls = []
+
+                            if parsed_step_calls:
+                                parts.append(first_part)
+                                first_id = first_call.get("id")
+                                if first_id:
+                                    emitted_function_call_ids.add(first_id)
+                                    tool_name_by_id[first_id] = str(first_call["name"])
+
+                                for call in parsed_step_calls[1:]:
+                                    if require_signature and not call.get("thought_signature"):
+                                        replay_stats["replay_calls_kept_unsigned_nonleading"] += 1
+
+                                    part = self._build_function_call_part(
+                                        tool_name=str(call["name"]),
+                                        tool_input=call["input"],
+                                        tool_call_id=call.get("id"),
+                                        thought_signature=call.get("thought_signature"),
+                                        genai_types=genai_types,
+                                    )
+                                    parts.append(part)
+                                    tc_id = call.get("id")
+                                    if tc_id:
+                                        emitted_function_call_ids.add(tc_id)
+                                        tool_name_by_id[tc_id] = str(call["name"])
 
                 if parts:
                     contents.append(self._build_content(role="model", parts=parts, genai_types=genai_types))
@@ -533,8 +722,6 @@ class GeminiProvider(ProviderClient):
                         genai_types=genai_types,
                     )
                     contents.append(self._build_content(role="user", parts=[part], genai_types=genai_types))
-                elif tool_call_id_str and tool_call_id_str in skipped_unsigned_function_call_ids:
-                    continue
                 else:
                     fallback_text = _format_history_tool_output_fallback(tool_name, response_payload)
                     text_part = self._build_text_part(fallback_text, genai_types=genai_types)
@@ -549,7 +736,7 @@ class GeminiProvider(ProviderClient):
                 text_part = self._build_text_part(_coerce_text(text), genai_types=genai_types)
                 contents.append(self._build_content(role="user", parts=[text_part], genai_types=genai_types))
 
-        return contents, system_instruction, unsigned_history_tool_calls
+        return contents, system_instruction, replay_stats
 
     def _consume_stream(
         self,
@@ -669,19 +856,32 @@ class GeminiProvider(ProviderClient):
         if system_prompt and not any(str(msg.get("role") or "").strip().lower() == "system" for msg in request_messages):
             request_messages = [{"role": "system", "content": system_prompt}] + request_messages
 
-        contents, system_instruction, unsigned_history_tool_calls = self._build_contents(
+        # Build replay contents as raw dict payloads to preserve Gemini-specific
+        # fields like thought_signature even with older SDK type models.
+        contents, system_instruction, replay_stats = self._build_contents(
             messages=request_messages,
             system_prompt=system_prompt,
-            genai_types=genai_types,
+            genai_types=None,
         )
         if not contents:
             user_part = self._build_text_part("", genai_types=genai_types)
             contents = [self._build_content(role="user", parts=[user_part], genai_types=genai_types)]
 
+        unsigned_history_tool_calls = int(replay_stats.get("unsigned_history_tool_call_count", 0))
         if unsigned_history_tool_calls:
             logger.warning(
                 "Skipped %d unsigned Gemini historical function call(s) from replay due missing thought_signature.",
                 unsigned_history_tool_calls,
+            )
+        if int(replay_stats.get("replay_steps_total", 0)):
+            logger.info(
+                "Gemini replay preflight: steps=%d downgraded=%d kept_unsigned_nonleading=%d dropped=%d injected_placeholder=%d mode=%s",
+                int(replay_stats.get("replay_steps_total", 0)),
+                int(replay_stats.get("replay_steps_downgraded_missing_leading_signature", 0)),
+                int(replay_stats.get("replay_calls_kept_unsigned_nonleading", 0)),
+                int(replay_stats.get("replay_calls_dropped_unrecoverable_signature", 0)),
+                int(replay_stats.get("replay_calls_injected_placeholder_signature", 0)),
+                self.replay_signature_mode,
             )
 
         generation_config = self._build_generation_config(
@@ -770,5 +970,19 @@ class GeminiProvider(ProviderClient):
                 "thinking_budget": self._resolve_thinking_budget(),
                 "thinking_token_count": len(thinking_chunks),
                 "unsigned_history_tool_call_count": unsigned_history_tool_calls,
+                "replay_signature_mode": self.replay_signature_mode,
+                "replay_steps_total": int(replay_stats.get("replay_steps_total", 0)),
+                "replay_steps_downgraded_missing_leading_signature": int(
+                    replay_stats.get("replay_steps_downgraded_missing_leading_signature", 0)
+                ),
+                "replay_calls_kept_unsigned_nonleading": int(
+                    replay_stats.get("replay_calls_kept_unsigned_nonleading", 0)
+                ),
+                "replay_calls_dropped_unrecoverable_signature": int(
+                    replay_stats.get("replay_calls_dropped_unrecoverable_signature", 0)
+                ),
+                "replay_calls_injected_placeholder_signature": int(
+                    replay_stats.get("replay_calls_injected_placeholder_signature", 0)
+                ),
             },
         )
