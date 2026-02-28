@@ -48,6 +48,11 @@ class Settings:
     enable_longevity_tools: bool
     enable_optional_source_tools: bool
     enable_builtin_demo_tools: bool
+    neo4j_uri: str | None
+    neo4j_user: str | None
+    neo4j_password: str | None
+    neo4j_database: str
+    enable_kg_tools: bool
 
 
 def _normalize_reasoning_effort(value: str | None) -> str:
@@ -110,4 +115,9 @@ def get_settings() -> Settings:
         enable_longevity_tools=_env_bool("ENABLE_LONGEVITY_TOOLS", default=True),
         enable_optional_source_tools=_env_bool("ENABLE_OPTIONAL_SOURCE_TOOLS", default=True),
         enable_builtin_demo_tools=_env_bool("ENABLE_BUILTIN_DEMO_TOOLS", default=False),
+        neo4j_uri=os.getenv("NEO4J_URI"),
+        neo4j_user=os.getenv("NEO4J_USERNAME"),
+        neo4j_password=os.getenv("NEO4J_PASSWORD"),
+        neo4j_database=os.getenv("NEO4J_DATABASE_NAME", "neo4j"),
+        enable_kg_tools=_env_bool("ENABLE_KG_TOOLS", default=False),
     )

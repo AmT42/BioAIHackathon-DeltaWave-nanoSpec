@@ -11,6 +11,7 @@ from app.agent.tools.sources.longevity import build_longevity_tools
 from app.agent.tools.sources.normalization import build_normalization_tools
 from app.agent.tools.sources.optional_sources import build_optional_source_tools
 from app.agent.tools.sources.safety import build_safety_tools
+from app.agent.tools.sources.knowledge_graph import build_kg_tools
 from app.agent.tools.sources.trials import build_trial_tools
 
 
@@ -20,6 +21,8 @@ def _apply_source_gating(settings: Settings, tools: list[ToolSpec]) -> list[Tool
         if tool.source == "openalex" and not settings.openalex_api_key:
             continue
         if tool.source == "epistemonikos" and not settings.epistemonikos_api_key:
+            continue
+        if tool.source == "crossbar_kg" and not (settings.neo4j_uri and settings.neo4j_user and settings.neo4j_password):
             continue
         gated.append(tool)
     return gated
@@ -52,6 +55,8 @@ def create_science_registry(settings: Settings) -> ToolRegistry:
         tools.extend(build_longevity_tools(http))
     if settings.enable_optional_source_tools:
         tools.extend(build_optional_source_tools(settings, http))
+    if settings.enable_kg_tools:
+        tools.extend(build_kg_tools(settings))
 
     tools = _apply_source_gating(settings, tools)
 
