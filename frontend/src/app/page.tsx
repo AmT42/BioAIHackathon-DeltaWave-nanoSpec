@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 
 import { Header } from "@/components/Header";
@@ -37,6 +37,9 @@ const SUGGESTIONS = [
 const AUTO_SCROLL_THRESHOLD_PX = 120;
 const STREAM_FLUSH_INTERVAL_MS = 18;
 const MAX_NON_STREAM_EVENTS_PER_TICK = 8;
+const THEME_STORAGE_KEY = "longevity-theme";
+
+type ThemeMode = "dark" | "light";
 const TOKEN_EVENT_TYPES = new Set<WsEvent["type"]>([
   "main_agent_segment_token",
   "main_agent_thinking_token",
@@ -70,6 +73,7 @@ export default function Page() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [threads, setThreads] = useState<ThreadMeta[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [theme, setTheme] = useState<ThemeMode>("dark");
   const wsRef = useRef<WsClient | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -217,6 +221,25 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (storedTheme === "dark" || storedTheme === "light") {
+      setTheme(storedTheme);
+      return;
+    }
+    if (window.matchMedia?.("(prefers-color-scheme: light)").matches) {
+      setTheme("light");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    document.documentElement.setAttribute("data-theme", theme);
+    document.documentElement.style.colorScheme = theme;
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
+
   function handleSend(message: string) {
     if (!connected || !wsRef.current) return;
     dispatch({ type: "LOCAL_USER_MESSAGE", message });
@@ -269,6 +292,13 @@ export default function Page() {
   }
 
   const hasTurns = state.turns.length > 0;
+  const latestEvidence = useMemo(() => {
+    for (let i = state.turns.length - 1; i >= 0; i -= 1) {
+      const evidence = state.turns[i].evidence;
+      if (evidence) return evidence;
+    }
+    return null;
+  }, [state.turns]);
 
   return (
     <div className="app-layout">
@@ -294,6 +324,8 @@ export default function Page() {
           threadId={threadId}
           connected={connected}
           streaming={isStreaming}
+          theme={theme}
+          onToggleTheme={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
           onNewThread={handleNewThread}
           onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           sidebarOpen={sidebarOpen}
@@ -348,7 +380,7 @@ export default function Page() {
             />
           </section>
 
-          <KgGraphPanel graph={state.kgGraph} />
+          <KgGraphPanel graph={state.kgGraph} theme={theme} evidence={latestEvidence} />
         </div>
       </main>
     </div>

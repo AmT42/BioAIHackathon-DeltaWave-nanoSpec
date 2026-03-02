@@ -1,6 +1,10 @@
 import { Turn, WorkStep, WsEvent } from "@/types/events";
 import { KgMergedGraph } from "@/types/kgGraph";
 import {
+  extractEvidenceFromToolResult,
+  extractLatestEvidenceFromTraceBlocks,
+} from "@/lib/evidence";
+import {
   createEmptyKgMergedGraph,
   extractKgSubgraphFromToolResult,
   mergeSubgraphIntoThreadGraph,
@@ -83,6 +87,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function asRecordArray(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is Record<string, unknown> => Boolean(asRecord(item)));
+}
+
 function parseToolResultObject(value: unknown): Record<string, unknown> | null {
   const direct = asRecord(value);
   if (direct) return direct;
@@ -95,6 +104,11 @@ function parseToolResultObject(value: unknown): Record<string, unknown> | null {
     }
   }
   return null;
+}
+
+function extractTraceBlocksFromMetadata(metadata: Record<string, unknown> | null | undefined): Array<Record<string, unknown>> {
+  const trace = asRecord(metadata?.trace_v1);
+  return asRecordArray(trace?.content_blocks_normalized);
 }
 
 function mergeKgGraphWithResult(
@@ -173,11 +187,7 @@ function appendChunk(existing: string | undefined, incoming: string | undefined)
 
 function extractTraceBlocks(message: HydratedMessage): Array<Record<string, unknown>> {
   const metadata = message.metadata ?? {};
-  const trace = (metadata.trace_v1 ?? {}) as Record<string, unknown>;
-
-  const traceBlocks = Array.isArray(trace.content_blocks_normalized)
-    ? (trace.content_blocks_normalized as Array<Record<string, unknown>>)
-    : [];
+  const traceBlocks = extractTraceBlocksFromMetadata(metadata);
 
   const fallbackBlocks =
     message.provider_format === "gemini_interleaved" && Array.isArray(message.content_blocks)
@@ -427,6 +437,7 @@ function hydrateTurns(messages: HydratedMessage[]): Turn[] {
     }
 
     const { assistantText, steps } = parseTraceToSteps(msg);
+    const evidence = extractLatestEvidenceFromTraceBlocks(extractTraceBlocks(msg));
     const existing = turns[targetIdx];
 
     turns[targetIdx] = {
@@ -435,6 +446,7 @@ function hydrateTurns(messages: HydratedMessage[]): Turn[] {
       assistantText: assistantText || existing.assistantText,
       assistantMessageId: msg.id,
       workSteps: steps.length > 0 ? steps : existing.workSteps,
+      evidence: evidence ?? existing.evidence,
       status: "done",
     };
   }
@@ -840,20 +852,31 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "main_agent_tool_result": {
       const resultPayload = parseToolResultObject(event.result) ?? {};
       const eventToolName = normalizeToolName(event.tool_name);
+      const evidencePayload = extractEvidenceFromToolResult(eventToolName, resultPayload);
       const nextKgGraph = mergeKgGraphWithResult(baseState.kgGraph, eventToolName, resultPayload);
-      const kgOnlyState = nextKgGraph === baseState.kgGraph ? baseState : { ...baseState, kgGraph: nextKgGraph };
+      let nextState = nextKgGraph === baseState.kgGraph ? baseState : { ...baseState, kgGraph: nextKgGraph };
 
-      if (event.parent_tool_use_id) return kgOnlyState;
-      if (!isUiVisible(event.ui_visible)) return kgOnlyState;
-      if (event.tool_name === "repl_exec") return kgOnlyState;
-      const ensured = ensureTurn(baseState.turns, runId);
+      if (evidencePayload) {
+        const ensuredEvidence = ensureTurn(nextState.turns, runId);
+        const evidenceTurns = [...ensuredEvidence.turns];
+        evidenceTurns[ensuredEvidence.index] = {
+          ...evidenceTurns[ensuredEvidence.index],
+          evidence: evidencePayload,
+        };
+        nextState = { ...nextState, turns: evidenceTurns };
+      }
+
+      if (event.parent_tool_use_id) return nextState;
+      if (!isUiVisible(event.ui_visible)) return nextState;
+      if (event.tool_name === "repl_exec") return nextState;
+      const ensured = ensureTurn(nextState.turns, runId);
       const nextTurns = [...ensured.turns];
       const target = nextTurns[ensured.index];
       const toolUseId = event.tool_use_id ?? `tool-${runId ?? "norun"}-${event.segment_index ?? 0}`;
       const stepId = `tool-${toolUseId}`;
       const existing = target.workSteps.find((step) => step.id === stepId);
       const toolName = existing?.toolName ?? event.tool_name;
-      if (!isDisplayableTopLevelToolName(toolName)) return kgOnlyState;
+      if (!isDisplayableTopLevelToolName(toolName)) return nextState;
       if (toolName === "bash_exec") {
         const output = asRecord(resultPayload.output);
         const statusRaw = String(resultPayload.status ?? "");
@@ -877,9 +900,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           result: resultPayload,
         });
         nextTurns[ensured.index] = target;
-        return nextKgGraph === baseState.kgGraph
-          ? { ...baseState, turns: nextTurns }
-          : { ...baseState, turns: nextTurns, kgGraph: nextKgGraph };
+        return { ...nextState, turns: nextTurns };
       }
       const nextStatus =
         resultPayload.status === "success" || resultPayload.status === "completed"
@@ -895,7 +916,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         toolName,
       });
       nextTurns[ensured.index] = target;
-      return { ...baseState, turns: nextTurns, kgGraph: nextKgGraph };
+      return { ...nextState, turns: nextTurns };
     }
 
     case "main_agent_complete": {
@@ -907,6 +928,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }
       if (typeof event.message?.content === "string" && event.message.content.trim().length > 0) {
         target.assistantText = event.message.content;
+      }
+      const messageMetadata = asRecord(event.message?.metadata);
+      const completionEvidence = extractLatestEvidenceFromTraceBlocks(
+        extractTraceBlocksFromMetadata(messageMetadata)
+      );
+      if (completionEvidence) {
+        target.evidence = completionEvidence;
       }
       target.status = "done";
       nextTurns[ensured.index] = target;

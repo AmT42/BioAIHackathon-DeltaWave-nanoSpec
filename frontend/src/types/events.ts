@@ -1,3 +1,5 @@
+import { EvidencePanelData } from "@/types/evidence";
+
 export type WsEventType =
   | "main_agent_start"
   | "main_agent_segment_start"
@@ -79,4 +81,5 @@ export type Turn = {
   assistantMessageId?: string;
   status: "streaming" | "done" | "error";
   workSteps: WorkStep[];
+  evidence?: EvidencePanelData;
 };

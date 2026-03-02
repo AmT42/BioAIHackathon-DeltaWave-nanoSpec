@@ -6,6 +6,8 @@ type HeaderProps = {
   threadId: string | null;
   connected: boolean;
   streaming: boolean;
+  theme: "dark" | "light";
+  onToggleTheme: () => void;
   onNewThread: () => void;
   onToggleSidebar: () => void;
   sidebarOpen: boolean;
@@ -15,6 +17,8 @@ export function Header({
   threadId,
   connected,
   streaming,
+  theme,
+  onToggleTheme,
   onNewThread,
   onToggleSidebar,
   sidebarOpen,
@@ -43,6 +47,14 @@ export function Header({
       </div>
 
       <div className="header__controls">
+        <button
+          type="button"
+          className="header__btn"
+          onClick={onToggleTheme}
+          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+        >
+          {theme === "dark" ? "Light mode" : "Dark mode"}
+        </button>
         <StatusDot status={statusMode} label={statusLabel} />
         <button type="button" className="header__btn header__btn--primary" onClick={onNewThread}>
           + New
