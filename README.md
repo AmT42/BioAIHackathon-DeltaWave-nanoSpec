@@ -10,6 +10,7 @@ Minimal Gemini-first chat stack with:
 
 - `backend/`: FastAPI + SQLAlchemy async
 - `frontend/`: Next.js chat UI with separated worklog vs final answer
+- `knowledge-graph/`: Scripts to download and build the [CROssBAR](https://github.com/HUBioDataLab/CROssBARv2-KG) knowledge graph in Neo4j
 
 ## Backend Quick Start
 
@@ -48,6 +49,54 @@ NEXT_PUBLIC_BACKEND_URL=http://localhost:8000 npm run dev -- -p 3001
 ```
 
 Open `http://localhost:3000` (or `3001` if changed).
+
+## Knowledge Graph Setup
+
+The system queries a [CROssBAR](https://github.com/HUBioDataLab/CROssBARv2-KG) biomedical knowledge graph stored in Neo4j (14 node types, 50+ relationship types covering genes, proteins, drugs, diseases, pathways, and more).
+
+### Option A: Docker (recommended)
+
+```bash
+pip install gdown
+cd knowledge-graph
+./download_csv.sh
+./docker-import.sh
+```
+
+Then start Neo4j with the imported data:
+
+```bash
+docker run -d \
+  --name crossbar-neo4j \
+  -p 7474:7474 -p 7687:7687 \
+  -v crossbar_neo4j_data:/data \
+  -e NEO4J_AUTH=neo4j/your-password-here \
+  -e NEO4J_server_default__database=crossbarall \
+  neo4j:5.26.0
+```
+
+### Option B: Local Neo4j install
+
+```bash
+pip install gdown
+cd knowledge-graph
+./download_csv.sh
+./import.sh
+```
+
+Requires Neo4j 5.x installed locally with `neo4j-admin` on PATH.
+
+### Connect the backend
+
+Set these in `backend/.env`:
+
+```
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=your-password-here
+NEO4J_DATABASE_NAME=crossbarall
+ENABLE_KG_TOOLS=true
+```
 
 ## Deploy (Render)
 
