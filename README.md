@@ -49,6 +49,18 @@ NEXT_PUBLIC_BACKEND_URL=http://localhost:8000 npm run dev -- -p 3001
 
 Open `http://localhost:3000` (or `3001` if changed).
 
+## Deploy (Render)
+
+For the quickest MVP deployment, use the included Render Blueprint:
+
+1. Push repo to GitHub.
+2. In Render, create a new **Blueprint** from this repo.
+3. Set backend `GEMINI_API_KEY`.
+4. Optionally set backend `OPENALEX_MAILTO`.
+5. Optional automation: run `./scripts/render_sync_env_from_backend_env.sh` with `RENDER_API_KEY` to sync env values from `backend/.env` and trigger deploys.
+
+Full guide: [DEPLOY_RENDER.md](DEPLOY_RENDER.md)
+
 ## API
 
 ### REST

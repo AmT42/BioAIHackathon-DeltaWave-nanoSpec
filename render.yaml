@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: hackathon-agent-core-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -e .
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENALEX_MAILTO
+        sync: false
+      - key: DATABASE_URL
+        value: sqlite+aiosqlite:///./chat.db
+      - key: REPL_WORKSPACE_ROOT
+        value: .
+      - key: REPL_PRELOAD_ENABLED
+        value: "false"
+
+  - type: web
+    name: hackathon-agent-core-frontend
+    runtime: node
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    startCommand: npx next start -p $PORT
+    autoDeploy: true
+    envVars:
+      - key: NEXT_PUBLIC_BACKEND_URL
+        fromService:
+          type: web
+          name: hackathon-agent-core-backend
+          envVarKey: RENDER_EXTERNAL_URL
